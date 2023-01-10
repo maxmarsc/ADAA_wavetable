@@ -53,7 +53,7 @@ Fcrads = 2*pi*Fc / Fs; % [rad/sample]
 [r,p,k] = residue(b,a);
 
 L = length(n);
-x = (1:L)*f0/Fs;
+x = (1:L)*f0/Fs;            % vector of x, evenly spaced
 
 y_aa = 0*x;
 for o = 1:2:order % poles are in conjg pairs, must take only one for each

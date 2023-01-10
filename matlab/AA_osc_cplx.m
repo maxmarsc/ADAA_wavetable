@@ -10,6 +10,21 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
       q = [-1];
       
   end
+
+  %%%
+  % X | list[scalar] E [0;1] : normalized sample position relative to the waveform length
+  % k | scalar : number of samples inside the waveform
+  %
+  % x | list[scalar] : of phase offsets
+  % x_red | scalar : phase offset modulo T (which is 1 but whatever)
+  %
+  % j | scalar : idx of an X sample
+  % j_red | scalar : j kinda modulo k  
+  %
+  % y | list[scalar] : result
+  %
+  %%%
+
   
   T = X(end); % period
   k = length(m); % nr segments
@@ -23,6 +38,7 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
   q_diff(k) = q(1) - q(k) - m(1) * T;
 
   % filter
+  % beta is alpha inside the paper
   B = resid;
   beta = polo;
   expbeta = exp(beta);
@@ -35,16 +51,20 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
   % index j corresponding to initial sample x_vz1  
   x_red = mod(x_vz1, T);
   j_red = binary_search_down(X, x_red, 1, length(X));
-  j = k * floor(x_vz1/T) + j_red - 1;
+  j = k * floor(x_vz1/T) + j_red - 1;   % seems to be an index, not a complex
+  % j seem to be the index of x, the phase offset
   
   % Process
   for n = 2:length(x)
     
+    % x_vz1 is the precedent value of x
     x_diff = x(n) - x_vz1;
     j_vz1 = j;
             
     if ((x_diff >= 0 && x_diff_vz1 >= 0) || (x_diff < 0 && x_diff_vz1 <= 0))
+      % If on the same slope than previous iteration
       j_vz1 = j + sign(x_red - X(j_red));
+      % +1 or -1 or +0 depending on the sign of x_red - X(j_red)
     end
     
     x_red = mod(x(n), T);
@@ -77,9 +97,11 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
     end
     I = (I + sign(x_diff) * I_sum)/beta^2;
     
+    % See formula n°10
     y_hat = expbeta * y_hat_vz1 + 2 * B * I;
+    % We take the real part of y
     y(n) = real(y_hat);
-        
+      
     x_vz1 = x(n);
     y_hat_vz1 = y_hat;
     x_diff_vz1 = x_diff;
@@ -88,7 +110,8 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
    
 end
 
-
+% i tel que x_i < x_0 < x_(i+1)
+%
 function y = binary_search_down(x, x0, j_min, j_max)
     % index of last number in ordered vec x <= x0, among those between j_min, j_max. 
     % if x0 < x(1), return 0.
@@ -142,7 +165,8 @@ function y = binary_search_up(x, x0, j_min, j_max)
    
 end
 
-
+% The weird mod that doesn't go to zero
+% defined after formula (18)
 function y = mod_bar(x, k)
   % return mod(x, k), if not 0 else return k
 
