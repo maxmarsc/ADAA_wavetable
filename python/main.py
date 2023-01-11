@@ -158,34 +158,42 @@ def main():
     m_diff[-1] = m[0] - m[-1]
     q_diff[-1] = q[0] - q[-1] - m[0] * NAIVE_SAW_X[-1]
 
-    print("m : [{},{},{},...,{},{},{}]".format(m[0], m[1], m[2], m[-3], m[-2], m[-1]))
-    print("q : [{},{},{},...,{},{},{}]".format(q[0], q[1], q[2], q[-3], q[-2], q[-1]))
-    print("m_diff : [{},{},{},...,{},{},{}]".format(m_diff[0], m_diff[1], m_diff[2], m_diff[-3], m_diff[-2], m_diff[-1]))
-    print("q_diff : [{},{},{},...,{},{},{}]".format(q_diff[0], q_diff[1], q_diff[2], q_diff[-3], q_diff[-2], q_diff[-1]))
-
+    # print("m : [{},{},{},...,{},{},{}]".format(m[0], m[1], m[2], m[-3], m[-2], m[-1]))
+    # print("q : [{},{},{},...,{},{},{}]".format(q[0], q[1], q[2], q[-3], q[-2], q[-1]))
+    # print("m_diff : [{},{},{},...,{},{},{}]".format(m_diff[0], m_diff[1], m_diff[2], m_diff[-3], m_diff[-2], m_diff[-1]))
+    # print("q_diff : [{},{},{},...,{},{},{}]".format(q_diff[0], q_diff[1], q_diff[2], q_diff[-3], q_diff[-2], q_diff[-1]))
+    abc = None
 
 
     for order in range(0, orders, 2):
         ri = BUTTER2_COEFFS[0][order]
         zi = BUTTER2_COEFFS[1][order]
-        y += process(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
+        (new_y, new_abc) = process(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
+        abc = new_abc
+        y +=new_y
+        # y += process(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
 
     y_naive = process_naive_linear(NAIVE_SAW, x)
 
 
     # freqs, powers = welch(y, fs=SAMPLERATE)
     # freqs_naive, power_naive = welch(y_naive, fs=SAMPLERATE)
-    fig, axs = plt.subplots(2)
+    fig, axs = plt.subplots(3)
     # axs[0].loglog(freqs, powers, 'b')
     # axs[0].hist(np.log2(powers), log=True, bins=freqs)
     axs[0].psd(y, Fs=SAMPLERATE, NFFT=2048, color="b", label="ADAA-IIR-1")
-    axs[0].psd(y_naive, Fs=SAMPLERATE, NFFT=2048, color="r", label="naive-linear")
+    axs[1].psd(y_naive, Fs=SAMPLERATE, NFFT=2048, color="r", label="naive-linear")
 
     # axs[0].loglog(freqs_naive, power_naive, 'r')
     # axs[1].hist(np.log2(power_naive), log=True, bins=freqs_naive)
+    test = np.zeros(num_frames_total)
+    for i in (1, 45, 89, 133, 177):
+        test[i] = -1.
 
-    axs[1].plot(x, y, 'b', label="ADAA-IIR-1")
-    axs[1].plot(x, y_naive, 'r', label="naive-linear")
+    axs[2].plot(x, y, 'b', label="ADAA-IIR-1")
+    axs[2].plot(x, y_naive, 'r', label="naive-linear")
+    # axs[2].plot(x, abc, 'g')
+    # axs[1].plot(x, test, 'green')
     plt.grid(True, which="both")
     plt.legend()
     plt.show()
@@ -198,6 +206,8 @@ def mod_bar(x, k):
 
 def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
     y = np.zeros(x.shape[0])
+    abc = np.ndarray(x.shape[0])
+
 
     pos_dif_counter=0
     neg_dif_counter=0
@@ -227,7 +237,7 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         x_diff = x[n] - prev_x
         prev_j = j
 
-        if n % 441 == 0:
+        if (n-1)%44 == 0:
             a = 0
 
         # TODO: No idea ?
@@ -236,6 +246,8 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
             prev_j = j + int(np.sign(x_red - X[j_red]))
         
         x_red = x[n] % T
+        if x_red == 0.0:
+            a = 0
 
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
@@ -257,10 +269,6 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         j_min_red = j_min % waveform_frames
         j_max_p_red = (j_max + 1) % waveform_frames
 
-        # print("j_min :", j_min, type(j_min))
-        # print("j_max :", j_max, type(j_max))
-        # print("j_min_red :", j_min_red, type(j_min_red))
-        # print("j_max_p_red :", j_max_p_red, type(j_max_p_red))
 
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
@@ -278,25 +286,23 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
         I_sum = 0
         # Here j_min and j_max are not used for anything except their offset
+        # TODO: check if it makes sense
         for i in range(j_min, j_max + 1):
+        # for i in range(j_min_red, j_max_p_red):
             i_red = i % waveform_frames
+            if j_max_p_red <= j_min_red:
+                break
+
             I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i - 1)/waveform_frames))/x_diff)\
                         * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
     
+
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
         # See formula (10)
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
         y[n] = y_cpx.real
-
-        # if j_max_p_red == 0:
-        #     print("n : ", n)
-        #     print("j_red : ", j_red)
-        #     print("j_max_p_red", j_max_p_red)
-
-        if y_cpx.real > 1.1:
-            # print("n :", n)
-            pass
+        abc[n] = I_sum
 
 
         prev_x = x[n]
@@ -306,7 +312,7 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
     print("POS_DIF_COUNT : ", pos_dif_counter)
     print("NEG_DIF_COUNT : ", neg_dif_counter)
-    return y
+    return (y, abc)
 
 
 
