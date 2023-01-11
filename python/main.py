@@ -1,6 +1,12 @@
 
 import numpy as np
 from math import exp, floor
+from cmath import exp as cexp
+from scipy.signal import welch
+# from pathlib import Path
+# import sys
+import matplotlib.pyplot as plt
+import matplotlib
 
 WAVEFORM_LEN = 2048
 SAMPLERATE = 44100
@@ -14,9 +20,11 @@ BUTTER2_COEFFS = np.array([
 ])
 
 NAIVE_SAW = np.zeros(WAVEFORM_LEN)
-NAIVE_SAW[:WAVEFORM_LEN/2] = np.linspace(0, 1, WAVEFORM_LEN/2, endpoint=True)
-NAIVE_SAW[WAVEFORM_LEN/2:] = np.linspace(-1, 0, WAVEFORM_LEN/2, endpoint=False)
+NAIVE_SAW[:WAVEFORM_LEN//2] = np.linspace(0, 1, WAVEFORM_LEN//2, endpoint=True)
+NAIVE_SAW[WAVEFORM_LEN//2:] = np.linspace(-1, 0, WAVEFORM_LEN//2, endpoint=False)
 NAIVE_SAW_X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
+
+matplotlib.use('TkAgg')
 
 def compute_m(x0, x1, y0, y1):
     return (y1 - y0) / (x1 - x0)
@@ -58,7 +66,7 @@ def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int
             j_min = i_mid
         
         if j_max - j_min > 1:
-            return binary_search_down(x, x0)
+            return binary_search_down(x, x0, j_min, j_max)
         else:
             return j_min
 
@@ -83,7 +91,39 @@ def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
             return binary_search_up(x, x0, j_min, j_max)
         else:
             return j_max
+
+
+def process_naive_linear(waveform, x_values):
+    y = np.zeros(x_values.shape[0])
+    waveform_len = waveform.shape[0]
+
+    phase = 0.0
+    prev_x = 0.0
+
+    for (i, x) in enumerate(x_values):
+        if i == 0:
+            continue
+
+        x_red = x % 1.0
+        relative_idx = x_red * waveform_len
+
+        prev_idx = floor(relative_idx)
+
+        if relative_idx == prev_idx:
+            y[i] = waveform[prev_idx]
+        else:
+            a = (waveform[prev_idx + 1] - waveform[prev_idx]) / (x - prev_x)
+            b = (waveform[prev_idx +1] * (x - prev_x) - prev_x * (waveform[prev_idx + 1] - waveform[prev_idx])) / (x - prev_x)
+            y[i] = a * x + b
+
+        prev_x = x
     
+    return y
+
+
+
+
+
 
 def main():
     orders = len(BUTTER2_COEFFS[0])
@@ -97,7 +137,7 @@ def main():
     
     # Precomputing diffs
     m_diff = np.zeros(m.shape[0])
-    q_diff = np.zeros(q.shape[1])
+    q_diff = np.zeros(q.shape[0])
     
     for i in range(m.shape[0] - 1):
         m_diff[i] = m[i+1] - m[i]
@@ -109,6 +149,18 @@ def main():
         ri = BUTTER2_COEFFS[0][order]
         zi = BUTTER2_COEFFS[1][order]
         y += process(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
+
+    y_naive = process_naive_linear(NAIVE_SAW, x)
+
+    freqs, powers = welch(y, fs=SAMPLERATE)
+    freqs_naive, power_naive = welch(y_naive, fs=SAMPLERATE)
+    fig, axs = plt.subplots(2)
+    axs[0].loglog(freqs, powers, 'b')
+    axs[1].plot(x, y, 'b')
+    axs[0].loglog(freqs_naive, power_naive, 'r')
+    axs[1].plot(x, y_naive, 'r')
+    plt.grid(True, which="both")
+    plt.show()
 
 
 def mod_bar(x, k):
@@ -124,7 +176,7 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
     waveform_frames = m.shape[0]     # aka k
 
-    expbeta = exp(beta)
+    expbeta = cexp(beta)
 
     # Initial condition
     prev_x = 0
@@ -144,7 +196,7 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         # TODO: No idea ?
         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
-            prev_j = j + np.sign(x_red - X(j_red))
+            prev_j = j + int(np.sign(x_red - X[j_red]))
         
         x_red = x[n] % T
 
@@ -168,24 +220,29 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         j_min_red = j_min % waveform_frames
         j_max_p_red = (j_max + 1) % waveform_frames
 
+        # print("j_min :", j_min, type(j_min))
+        # print("j_max :", j_max, type(j_max))
+        # print("j_min_red :", j_min_red, type(j_min_red))
+        # print("j_max_p_red :", j_max_p_red, type(j_max_p_red))
+
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
             I = expbeta\
                     * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor((j_min - 1) / waveform_frames)) + q[j_min_red]))\
                     - m[j_max_p_red] * x_diff\
-                    - beta * (m[j_max_p_red] * (x(n) - T * floor(j_max/waveform_frames)) + q[j_max_p_red])
+                    - beta * (m[j_max_p_red] * (x[n] - T * floor(j_max/waveform_frames)) + q[j_max_p_red])
         else:
             I = expbeta\
                     * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - T * floor(j_max/waveform_frames)) + q[j_max_p_red]))\
                     - m[j_min_red] * x_diff\
-                    - beta * (m[j_min_red] * (x(n) - T * floor((j_min - 1)/waveform_frames)) + q[j_min_red])
+                    - beta * (m[j_min_red] * (x[n] - T * floor((j_min - 1)/waveform_frames)) + q[j_min_red])
 
         I_sum = 0
         # Here j_min and j_max are not used for anything except their offset
         for i in range(j_min, j_max + 1):
             i_red = i % waveform_frames
-            I_sum += exp(beta * (x(n) - X(i_red + 1) - T * floor((i - 1)/waveform_frames))/x_diff)\
-                        * (beta * q_diff(i_red) + m_diff(i_red) * (x_diff + beta * X(i_red + 1)))
+            I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i - 1)/waveform_frames))/x_diff)\
+                        * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
     
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
