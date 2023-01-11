@@ -66,7 +66,7 @@ def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int
     """
     return i as x_i < x_0 < x_(i+1) && j_min <= i <= j_max
     """
-    if x0 < x[0]:
+    if x0 <= x[0]:
         return -1           # Should it be -1 ? 0 in matlab so it's weird
     elif x0 >= x[j_max]:
         return j_max - 1
@@ -90,7 +90,7 @@ def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
     """
     return i as x_i > x_0 > x_(i+1) && j_min <= i <= j_max
     """
-    if x0 > x[-1]:
+    if x0 >= x[-1]:
         return x.shape[0]
     elif x0 <= x[0]:
         return 0
@@ -138,8 +138,6 @@ def process_naive_linear(waveform, x_values):
 
 
 
-
-
 def main():
     orders = len(BUTTER2_COEFFS[0])
     play_freq = 1000
@@ -160,6 +158,13 @@ def main():
     m_diff[-1] = m[0] - m[-1]
     q_diff[-1] = q[0] - q[-1] - m[0] * NAIVE_SAW_X[-1]
 
+    print("m : [{},{},{},...,{},{},{}]".format(m[0], m[1], m[2], m[-3], m[-2], m[-1]))
+    print("q : [{},{},{},...,{},{},{}]".format(q[0], q[1], q[2], q[-3], q[-2], q[-1]))
+    print("m_diff : [{},{},{},...,{},{},{}]".format(m_diff[0], m_diff[1], m_diff[2], m_diff[-3], m_diff[-2], m_diff[-1]))
+    print("q_diff : [{},{},{},...,{},{},{}]".format(q_diff[0], q_diff[1], q_diff[2], q_diff[-3], q_diff[-2], q_diff[-1]))
+
+
+
     for order in range(0, orders, 2):
         ri = BUTTER2_COEFFS[0][order]
         zi = BUTTER2_COEFFS[1][order]
@@ -167,8 +172,9 @@ def main():
 
     y_naive = process_naive_linear(NAIVE_SAW, x)
 
-    freqs, powers = welch(y, fs=SAMPLERATE)
-    freqs_naive, power_naive = welch(y_naive, fs=SAMPLERATE)
+
+    # freqs, powers = welch(y, fs=SAMPLERATE)
+    # freqs_naive, power_naive = welch(y_naive, fs=SAMPLERATE)
     fig, axs = plt.subplots(2)
     # axs[0].loglog(freqs, powers, 'b')
     # axs[0].hist(np.log2(powers), log=True, bins=freqs)
@@ -193,6 +199,12 @@ def mod_bar(x, k):
 def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
     y = np.zeros(x.shape[0])
 
+    pos_dif_counter=0
+    neg_dif_counter=0
+    # print("m_diff[0] : ", m_diff[0])
+    # print("q_diff[0] : ", q_diff[0])
+    # print("m")
+
     # Period - should be 1
     T = X[-1]
 
@@ -215,6 +227,9 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         x_diff = x[n] - prev_x
         prev_j = j
 
+        if n % 441 == 0:
+            a = 0
+
         # TODO: No idea ?
         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
@@ -236,9 +251,9 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
             j_min = j
             j_max = prev_j
 
-        # TODO: Shouldn't it be normal modulu to deal with matlab 1 offset ?
+        # TODO: Shouldn't it be normal modulo to deal with matlab 1 offset ?
         # j_min_red = mod_bar(j_min, waveform_frames)
-        # j_max_bar = mod_bar(j_max +1 , waveform_frames)
+        # j_max_p_red = mod_bar(j_max +1 , waveform_frames)
         j_min_red = j_min % waveform_frames
         j_max_p_red = (j_max + 1) % waveform_frames
 
@@ -249,11 +264,13 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
+            pos_dif_counter+=1
             I = expbeta\
                     * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor((j_min - 1) / waveform_frames)) + q[j_min_red]))\
                     - m[j_max_p_red] * x_diff\
                     - beta * (m[j_max_p_red] * (x[n] - T * floor(j_max/waveform_frames)) + q[j_max_p_red])
         else:
+            neg_dif_counter+=1
             I = expbeta\
                     * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - T * floor(j_max/waveform_frames)) + q[j_max_p_red]))\
                     - m[j_min_red] * x_diff\
@@ -272,10 +289,23 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
         y[n] = y_cpx.real
 
+        # if j_max_p_red == 0:
+        #     print("n : ", n)
+        #     print("j_red : ", j_red)
+        #     print("j_max_p_red", j_max_p_red)
+
+        if y_cpx.real > 1.1:
+            # print("n :", n)
+            pass
+
+
         prev_x = x[n]
         prev_cpx_y = y_cpx
         prev_x_diff = x_diff
 
+
+    print("POS_DIF_COUNT : ", pos_dif_counter)
+    print("NEG_DIF_COUNT : ", neg_dif_counter)
     return y
 
 
