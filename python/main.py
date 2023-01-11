@@ -19,12 +19,27 @@ BUTTER2_COEFFS = np.array([
     [-2.2164 + 2.2164j, -2.2164 - 2.2164j,]                 # poles
 ])
 
-NAIVE_SAW = np.zeros(WAVEFORM_LEN)
-NAIVE_SAW[:WAVEFORM_LEN//2] = np.linspace(0, 1, WAVEFORM_LEN//2, endpoint=True)
-NAIVE_SAW[WAVEFORM_LEN//2:] = np.linspace(-1, 0, WAVEFORM_LEN//2, endpoint=False)
-NAIVE_SAW_X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
+# NAIVE_SAW = np.zeros(WAVEFORM_LEN)
+# NAIVE_SAW[:WAVEFORM_LEN//2] = np.linspace(0, 1, WAVEFORM_LEN//2, endpoint=True)
+# NAIVE_SAW[WAVEFORM_LEN//2:] = np.linspace(-1, 0, WAVEFORM_LEN//2, endpoint=False)
 
 matplotlib.use('TkAgg')
+
+def compute_naive_saw(frames: int) -> np.ndarray:
+    phase = 0.5
+    waveform = np.zeros(frames)
+    step = 1.0/frames
+
+    for i in range(frames):
+        waveform[i] = 2.0 * phase - 1
+        phase = (phase + step) % 1.0
+
+    return waveform
+
+
+NAIVE_SAW = compute_naive_saw(WAVEFORM_LEN)
+NAIVE_SAW_X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
+
 
 def compute_m(x0, x1, y0, y1):
     return (y1 - y0) / (x1 - x0)
@@ -155,11 +170,18 @@ def main():
     freqs, powers = welch(y, fs=SAMPLERATE)
     freqs_naive, power_naive = welch(y_naive, fs=SAMPLERATE)
     fig, axs = plt.subplots(2)
-    axs[0].loglog(freqs, powers, 'b')
-    axs[1].plot(x, y, 'b')
-    axs[0].loglog(freqs_naive, power_naive, 'r')
-    axs[1].plot(x, y_naive, 'r')
+    # axs[0].loglog(freqs, powers, 'b')
+    # axs[0].hist(np.log2(powers), log=True, bins=freqs)
+    axs[0].psd(y, Fs=SAMPLERATE, NFFT=2048, color="b", label="ADAA-IIR-1")
+    axs[0].psd(y_naive, Fs=SAMPLERATE, NFFT=2048, color="r", label="naive-linear")
+
+    # axs[0].loglog(freqs_naive, power_naive, 'r')
+    # axs[1].hist(np.log2(power_naive), log=True, bins=freqs_naive)
+
+    axs[1].plot(x, y, 'b', label="ADAA-IIR-1")
+    axs[1].plot(x, y_naive, 'r', label="naive-linear")
     plt.grid(True, which="both")
+    plt.legend()
     plt.show()
 
 
