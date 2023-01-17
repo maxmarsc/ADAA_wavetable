@@ -173,9 +173,7 @@ def main():
     for order in range(0, orders, 2):
         ri = BUTTER2_COEFFS[0][order]
         zi = BUTTER2_COEFFS[1][order]
-        (new_y, new_abc) = process(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
-        abc = new_abc
-        y += new_y
+        y += process_fwd(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
         # y += process(x, ri, zi, NAIVE_SAW_X, m, q, m_diff, q_diff)
     
     # for order in range(0, 4, 2):
@@ -218,13 +216,11 @@ def mod_bar(x, k):
     m = x % k
     return m + k * (1 - np.sign(m))
 
-
-def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
+def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
     y = np.zeros(x.shape[0])
-    abc = np.ndarray(x.shape[0])
 
     # Period - should be 1
-    T = X[-1]
+    assert(X[-1] == 1.0)
 
     waveform_frames = m.shape[0]     # aka k
 
@@ -236,74 +232,41 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
     prev_x_diff = 0
 
     # Setting j indexs and some reduced values
-    x_red = prev_x % T
+    x_red = prev_x % 1.0
     j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
-    j = waveform_frames * floor(prev_x / T) + j_red - 1
 
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
+        assert(x_diff >= 0)
         prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
-        prev_j = j
+        prev_j_red = j_red % waveform_frames
 
         # TODO: No idea ?
         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
-            prev_j = j + int(np.sign(x_red - X[j_red]))
+            prev_j_red = j_red + int(np.sign(x_red - X[j_red]))
             # Is used to avoid computing a new j_min using the binary search, because
             # if j_min == j_max then the I sum is zero so its corresponds to the case
             # where x_n and x_n+1 are in the same interval
         
-        x_red = x[n] % T
+        x_red = x[n] % 1.0
 
-        # Should be differentiated upstream to avoid if on each sample
-        if x_diff >= 0:
-            # playback going forward
-            j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1) 
-            j = waveform_frames * floor(x[n] / T) + j_red - 1
-            j_min = prev_j
-            j_max = j
-        else:
-            # playback going backward
-            j_red = binary_search_up(X, x_red, 0, X.shape[0] - 1)
-            j = waveform_frames * floor(x[n] / T) + j_red - 1
-            j_min = j
-            j_max = prev_j
+        # playback going forward
+        j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
+        j_max_p_red = j_red
+        j_min_red = (prev_j_red - 1) % waveform_frames
 
-        # TODO: Shouldn't it be normal modulo to deal with matlab 1 offset ?
-        # j_min_red = mod_bar(j_min, waveform_frames)
-        # j_max_p_red = mod_bar(j_max +1 , waveform_frames)
-        j_min_red = j_min % waveform_frames
-        j_max_p_red = (j_max + 1) % waveform_frames
 
         prev_x_red_bar = prev_x % 1.0
         prev_x_red_bar += (prev_x_red_bar == 0.0)
 
-        # if (prev_x - T * floor(j_min/ waveform_frames)) != prev_x_red_bar:
-        #     a = prev_x - T * floor(j_min/ waveform_frames) ## ~ x[n-1] % 1.0
-        #     b = (X[j_min_red - 1], X[j_min_red], X[j_min_red+1])
-
-        # Should be differentiated upstream to avoid if on each sample
-        if x_diff >= 0:
-            ### OG version
-            # I = expbeta\
-            #         * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor(j_min/ waveform_frames)) + q[j_min_red]))\
-            #         - m[j_max_p_red] * x_diff\
-            #         - beta * (m[j_max_p_red] * (x[n] - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red])
-
-            ### j_min/j_max independant version
-            I = expbeta\
-                    * (m[j_min_red] * x_diff + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red]))\
-                    - m[j_max_p_red] * x_diff\
-                    - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
-        else:
-            I = expbeta\
-                    * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red]))\
-                    - m[j_min_red] * x_diff\
-                    - beta * (m[j_min_red] * (x[n] - T * floor(j_min/waveform_frames)) + q[j_min_red])
+        I = expbeta\
+                * (m[j_min_red] * x_diff + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red]))\
+                - m[j_max_p_red] * x_diff\
+                - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
 
         I_sum = 0
-        # for i in range(j_min, j_max + 1):         OG Version
         for i in range(j_min_red, j_max_p_red):
             i_red = i % waveform_frames
             x_red_bar = x[n] % 1.0
@@ -311,24 +274,132 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
             I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
                         * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
-            # OG Version
-            # I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i)/waveform_frames))/x_diff)\
-            #             * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
-    
 
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
         # See formula (10)
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
         y[n] = y_cpx.real
-        abc[n] = I_sum
-
 
         prev_x = x[n]
         prev_cpx_y = y_cpx
         prev_x_diff = x_diff
 
-    return (y, abc)
+    return y
+
+# def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
+#     y = np.zeros(x.shape[0])
+#     abc = np.ndarray(x.shape[0])
+
+#     # Period - should be 1
+#     assert(X[-1] == 1.0)
+
+#     waveform_frames = m.shape[0]     # aka k
+
+#     expbeta = cexp(beta)
+
+#     # Initial condition
+#     prev_x = x[0]
+#     prev_cpx_y: complex = 0
+#     prev_x_diff = 0
+
+#     # Setting j indexs and some reduced values
+#     x_red = prev_x % 1.0
+#     j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
+#     # j = waveform_frames * floor(prev_x / 1.0) + j_red - 1
+
+#     for n in range(1, x.shape[0]):
+#         # loop init
+#         x_diff = x[n] - prev_x
+#         prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
+#         # prev_j = j
+#         prev_j_red = j_red % waveform_frames
+
+#         # TODO: No idea ?
+#         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
+#             # If on the same slop as the previous iteration
+#             # prev_j = j + int(np.sign(x_red - X[j_red]))
+#             prev_j_red = j_red + int(np.sign(x_red - X[j_red]))
+#             # Is used to avoid computing a new j_min using the binary search, because
+#             # if j_min == j_max then the I sum is zero so its corresponds to the case
+#             # where x_n and x_n+1 are in the same interval
+        
+#         x_red = x[n] % 1.0
+
+#         # Should be differentiated upstream to avoid if on each sample
+#         if x_diff >= 0:
+#             # playback going forward
+#             j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
+#             j_max_p_red = j_red
+#             j_min_red = (prev_j_red - 1) % waveform_frames
+
+#             # j = waveform_frames * floor(x[n] / 1.0) + j_red - 1
+#             # j_min = prev_j
+#             # j_max = j
+#         else:
+#             # playback going backward
+#             j_red = binary_search_up(X, x_red, 0, X.shape[0] - 1)
+#             j = waveform_frames * floor(x[n] / 1.0) + j_red - 1
+#             j_min = j
+#             j_max = prev_j
+
+#         # TODO: Shouldn't it be normal modulo to deal with matlab 1 offset ?
+#         # j_min_red = j_min % waveform_frames
+#         # j_max_p_red = (j_max + 1) % waveform_frames
+
+#         prev_x_red_bar = prev_x % 1.0
+#         prev_x_red_bar += (prev_x_red_bar == 0.0)
+
+#         # if (prev_x - T * floor(j_min/ waveform_frames)) != prev_x_red_bar:
+#         #     a = prev_x - T * floor(j_min/ waveform_frames) ## ~ x[n-1] % 1.0
+#         #     b = (X[j_min_red - 1], X[j_min_red], X[j_min_red+1])
+
+#         # Should be differentiated upstream to avoid if on each sample
+#         if x_diff >= 0:
+#             ### OG version
+#             # I = expbeta\
+#             #         * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor(j_min/ waveform_frames)) + q[j_min_red]))\
+#             #         - m[j_max_p_red] * x_diff\
+#             #         - beta * (m[j_max_p_red] * (x[n] - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red])
+
+#             ### j_min/j_max independant version
+#             I = expbeta\
+#                     * (m[j_min_red] * x_diff + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red]))\
+#                     - m[j_max_p_red] * x_diff\
+#                     - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
+#         else:
+#             I = expbeta\
+#                     * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - 1.0 * floor((j_max+1)/waveform_frames)) + q[j_max_p_red]))\
+#                     - m[j_min_red] * x_diff\
+#                     - beta * (m[j_min_red] * (x[n] - 1.0 * floor(j_min/waveform_frames)) + q[j_min_red])
+
+#         I_sum = 0
+#         # for i in range(j_min, j_max + 1):         OG Version
+#         for i in range(j_min_red, j_max_p_red):
+#             i_red = i % waveform_frames
+#             x_red_bar = x[n] % 1.0
+#             x_red_bar = x_red_bar + (x_red_bar < X[i_red])
+
+#             I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
+#                         * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
+#             # OG Version
+#             # I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i)/waveform_frames))/x_diff)\
+#             #             * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
+    
+
+#         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
+
+#         # See formula (10)
+#         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
+#         y[n] = y_cpx.real
+#         abc[n] = I_sum
+
+
+#         prev_x = x[n]
+#         prev_cpx_y = y_cpx
+#         prev_x_diff = x_diff
+
+#     return (y, abc)
 
 
 
