@@ -1,15 +1,17 @@
-function y = AA_osc_cplx(x, resid, polo, fs, wave)
+function [y, I_sums] = AA_osc_cplx(x, resid, polo, fs, wave)
   
   % waveform info
   if strcmp(wave,'ESCALATION')
       [X,m,q,~] = generateEscalationII_w3();
+  elseif strcmp(wave,'WAVETABLE_SAW')
+      [X,m,q, ~] = generateWavetableSaw();
   else
       % SAW
       X = [0,1];
       m = [2];
       q = [-1];
       
-  end
+  endif
 
   %%%
   % X | list[scalar] E [0;1] : normalized sample position relative to the waveform length
@@ -24,6 +26,7 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
   % y | list[scalar] : result
   %
   %%%
+  I_sums = x*0;
 
   
   T = X(end); % period
@@ -84,18 +87,30 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
     j_min_bar = mod_bar(j_min, k);
     j_max_p_bar = mod_bar(j_max + 1, k);
     
-    if (x_diff >= 0)
-      I = expbeta * (m(j_min_bar) * x_diff + beta * (m(j_min_bar) * (x_vz1 - T * floor((j_min - 1)/k)) + q(j_min_bar))) - m(j_max_p_bar) * x_diff - beta * (m(j_max_p_bar) * (x(n) - T * floor(j_max/k)) + q(j_max_p_bar));
+    if (x_diff >= 0)      
+      I = expbeta \
+          * (m(j_min_bar) * x_diff + beta * (m(j_min_bar) * (x_vz1 - T * floor((j_min - 1)/k)) + q(j_min_bar)))\
+          - m(j_max_p_bar) * x_diff \
+          - beta * (m(j_max_p_bar) * (x(n) - T * floor(j_max/k)) + q(j_max_p_bar));
     else
-      I = expbeta * (m(j_max_p_bar) * x_diff + beta * (m(j_max_p_bar) * (x_vz1 - T * floor(j_max/k)) + q(j_max_p_bar))) - m(j_min_bar) * x_diff - beta * (m(j_min_bar) * (x(n) - T * floor((j_min - 1)/k)) + q(j_min_bar));
+      I = expbeta \
+          * (m(j_max_p_bar) * x_diff + beta * (m(j_max_p_bar) * (x_vz1 - T * floor(j_max/k)) + q(j_max_p_bar))) \
+          - m(j_min_bar) * x_diff \
+          - beta * (m(j_min_bar) * (x(n) - T * floor((j_min - 1)/k)) + q(j_min_bar));
     end
       
     I_sum = 0;
+    s_parts = zeros(1, j_max - j_min);
     for l = j_min:j_max
       l_bar = mod_bar(l, k);
-      I_sum = I_sum + exp(beta * (x(n) - X(l_bar + 1) - T * floor((l - 1)/k))/x_diff) * (beta * q_diff(l_bar) + m_diff(l_bar) * (x_diff + beta * X(l_bar + 1)));
+      I_sum = I_sum \
+          + exp(beta * (x(n) - X(l_bar + 1) - T * floor((l - 1)/k))/x_diff) \
+              * (beta * q_diff(l_bar) + m_diff(l_bar) * (x_diff + beta * X(l_bar + 1)));
     end
+
     I = (I + sign(x_diff) * I_sum)/beta^2;
+
+    I_sums(n) = I_sum;
     
     % See formula n°10
     y_hat = expbeta * y_hat_vz1 + 2 * B * I;
@@ -108,9 +123,9 @@ function y = AA_osc_cplx(x, resid, polo, fs, wave)
     
   end
    
-end
+endfunction
 
-% i tel que x_i < x_0 < x_(i+1)
+% i tel que  x_i < x_0 < x_(i+1) && j_min <= i <= j_max
 %
 function y = binary_search_down(x, x0, j_min, j_max)
     % index of last number in ordered vec x <= x0, among those between j_min, j_max. 
@@ -137,7 +152,7 @@ function y = binary_search_down(x, x0, j_min, j_max)
       end
     end
    
-end
+endfunction
 
 
 function y = binary_search_up(x, x0, j_min, j_max)
@@ -163,14 +178,12 @@ function y = binary_search_up(x, x0, j_min, j_max)
       end
     end
    
-end
+endfunction
 
 % The weird mod that doesn't go to zero
 % defined after formula (18)
 function y = mod_bar(x, k)
   % return mod(x, k), if not 0 else return k
-
   m = mod(x, k);
   y = m + k * (1 - sign(m));
-  
-end
+endfunction
