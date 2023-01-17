@@ -155,8 +155,8 @@ def main():
     (m, q) =  compute_m_q_vectors(NAIVE_SAW, NAIVE_SAW_X)
 
     
-    print("x {} {} {} : {} {} {}".format(x[-3], x[-2], x[-1], x[0], x[1], x[2]))
-    print("X {} {} {} : {} {} {}".format(NAIVE_SAW_X[-3], NAIVE_SAW_X[-2], NAIVE_SAW_X[-1], NAIVE_SAW_X[0], NAIVE_SAW_X[1], NAIVE_SAW_X[2]))
+    # print("x {} {} {} : {} {} {}".format(x[-3], x[-2], x[-1], x[0], x[1], x[2]))
+    # print("X {} {} {} : {} {} {}".format(NAIVE_SAW_X[-3], NAIVE_SAW_X[-2], NAIVE_SAW_X[-1], NAIVE_SAW_X[0], NAIVE_SAW_X[1], NAIVE_SAW_X[2]))
 
     # Precomputing diffs
     m_diff = np.zeros(m.shape[0])
@@ -185,7 +185,7 @@ def main():
 
     #     y4 += new_y
 
-    y_naive = process_naive_linear(NAIVE_SAW, x)
+    # y_naive = process_naive_linear(NAIVE_SAW, x)
 
 
     # freqs, powers = welch(y, fs=SAMPLERATE)
@@ -193,9 +193,9 @@ def main():
     fig, axs = plt.subplots(3)
     # axs[0].loglog(freqs, powers, 'b')
     # axs[0].hist(np.log2(powers), log=True, bins=freqs)
-    axs[1].psd(y, Fs=SAMPLERATE, NFFT=2048, color="b", label="ADAA-butterworth-2")
-    # axs[2].psd(y4, Fs=SAMPLERATE, NFFT=2048, color="black", label="ADAA-butterworth-2")
-    axs[0].psd(y_naive, Fs=SAMPLERATE, NFFT=2048, color="r", label="naive-linear")
+    axs[1].psd(y, Fs=SAMPLERATE, NFFT=4096, color="b", label="ADAA-butterworth-2")
+    # axs[0].psd(y4, Fs=SAMPLERATE, NFFT=2048, color="black", label="ADAA-butterworth-2")
+    # axs[0].psd(y_naive, Fs=SAMPLERATE, NFFT=2048, color="r", label="naive-linear")
 
     # axs[0].loglog(freqs_naive, power_naive, 'r')
     # axs[1].hist(np.log2(power_naive), log=True, bins=freqs_naive)
@@ -204,9 +204,9 @@ def main():
     # for i in (1, 45, 89, 133, 177):
     #     test[i] = -1.
 
-    axs[2].plot(x, y_naive, 'r', label="naive-linear")
+    # axs[2].plot(x, y_naive, 'r', label="naive-linear")
     axs[2].plot(x, y, 'b', label="ADAA-butterworth-2")
-    # axs[3].plot(x, y4, 'black', label="ADAA-butterworth-4")
+    # axs[2].plot(x, y4, 'black', label="ADAA-butterworth-4")
     # axs[2].plot(x, abc, 'g')
     # axs[2].plot(x, test, 'purple')
     plt.grid(True, which="both")
@@ -223,11 +223,6 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
     y = np.zeros(x.shape[0])
     abc = np.ndarray(x.shape[0])
 
-    diffs = {}
-
-    pos_dif_counter=0
-    neg_dif_counter=0
-
     # Period - should be 1
     T = X[-1]
 
@@ -236,7 +231,7 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
     expbeta = cexp(beta)
 
     # Initial condition
-    prev_x = 0
+    prev_x = x[0]
     prev_cpx_y: complex = 0
     prev_x_diff = 0
 
@@ -248,16 +243,18 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
+        prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
         prev_j = j
 
         # TODO: No idea ?
         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
             prev_j = j + int(np.sign(x_red - X[j_red]))
+            # Is used to avoid computing a new j_min using the binary search, because
+            # if j_min == j_max then the I sum is zero so its corresponds to the case
+            # where x_n and x_n+1 are in the same interval
         
         x_red = x[n] % T
-        if x_red == 0.0:
-            a = 0
 
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
@@ -279,28 +276,44 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
         j_min_red = j_min % waveform_frames
         j_max_p_red = (j_max + 1) % waveform_frames
 
-        print("{} vs {}".format(x[n] % 1.0, x[n] - T * floor((j_max+1)/waveform_frames)))
+        prev_x_red_bar = prev_x % 1.0
+        prev_x_red_bar += (prev_x_red_bar == 0.0)
+
+        # if (prev_x - T * floor(j_min/ waveform_frames)) != prev_x_red_bar:
+        #     a = prev_x - T * floor(j_min/ waveform_frames) ## ~ x[n-1] % 1.0
+        #     b = (X[j_min_red - 1], X[j_min_red], X[j_min_red+1])
 
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
+            ### OG version
+            # I = expbeta\
+            #         * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor(j_min/ waveform_frames)) + q[j_min_red]))\
+            #         - m[j_max_p_red] * x_diff\
+            #         - beta * (m[j_max_p_red] * (x[n] - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red])
+
+            ### j_min/j_max independant version
             I = expbeta\
-                    * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor((j_min) / waveform_frames)) + q[j_min_red]))\
+                    * (m[j_min_red] * x_diff + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red]))\
                     - m[j_max_p_red] * x_diff\
-                    - beta * (m[j_max_p_red] * (x[n] - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red])
+                    - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
         else:
             I = expbeta\
-                    * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - T * floor(j_max/waveform_frames)) + q[j_max_p_red]))\
+                    * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red]))\
                     - m[j_min_red] * x_diff\
-                    - beta * (m[j_min_red] * (x[n] - T * floor((j_min - 1)/waveform_frames)) + q[j_min_red])
+                    - beta * (m[j_min_red] * (x[n] - T * floor(j_min/waveform_frames)) + q[j_min_red])
 
         I_sum = 0
-        # Here j_min and j_max are not used for anything except their offset
-        # TODO: check if it makes sense
-        for i in range(j_min, j_max + 1):
-        # for i in range(j_min_red, j_max_p_red):
+        # for i in range(j_min, j_max + 1):         OG Version
+        for i in range(j_min_red, j_max_p_red):
             i_red = i % waveform_frames
-            I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i)/waveform_frames))/x_diff)\
+            x_red_bar = x[n] % 1.0
+            x_red_bar = x_red_bar + (x_red_bar < X[i_red])
+
+            I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
                         * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
+            # OG Version
+            # I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i)/waveform_frames))/x_diff)\
+            #             * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
     
 
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
