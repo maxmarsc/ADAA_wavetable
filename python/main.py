@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib
 import soxr
 
+from bl_waveform import bl_sawtooth
+
 WAVEFORM_LEN = 2048
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
@@ -48,9 +50,6 @@ BUTTERWORTH_COEFFS = {
     }
 }
 
-# NAIVE_SAW = np.zeros(WAVEFORM_LEN)
-# NAIVE_SAW[:WAVEFORM_LEN//2] = np.linspace(0, 1, WAVEFORM_LEN//2, endpoint=True)
-# NAIVE_SAW[WAVEFORM_LEN//2:] = np.linspace(-1, 0, WAVEFORM_LEN//2, endpoint=False)
 
 matplotlib.use('TkAgg')
 
@@ -214,6 +213,7 @@ def main():
         y4_up += process_fwd(x_up, ri_up, zi_up, NAIVE_SAW_X, m, q, m_diff, q_diff)
 
     y_naive = process_naive_linear(NAIVE_SAW, x)
+    y_bl = bl_sawtooth(np.linspace(0, DURATION_S, num = num_frames_total+1, endpoint = False), play_freq)
 
 
     # Downsample the upsampled output
@@ -234,16 +234,17 @@ def main():
     axs[1].psd(y4[3:], Fs=SAMPLERATE, NFFT=4096, color="black", label="ADAA-butterworth-2")
     axs[2].psd(y2_ds[3:], Fs=SAMPLERATE, NFFT=4096, color="green", label="ADAA-butterworth-2-OVS")
     axs[3].psd(y4_ds[3:], Fs=SAMPLERATE, NFFT=4096, color="purple", label="ADAA-butterworth-4-OVS")
+    axs[4].psd(y_bl[3:], Fs=SAMPLERATE, NFFT=4096, color="purple", label="band limited")
 
     for ax_idx in (0, 1, 2, 3):
         axs[ax_idx].minorticks_on()
         axs[ax_idx].grid(which="minor", linestyle=":")
 
-    axs[4].plot(x, y_naive, 'r', label="naive-linear")
-    axs[4].plot(x, y2, 'b', label="ADAA-butterworth-2")
-    axs[4].plot(x, y4, 'black', label="ADAA-butterworth-4")
-    axs[4].plot(x, y2_ds, 'green', label="ADAA-butterworth-2-OVS")
-    axs[4].plot(x, y2_ds, 'purple', label="ADAA-butterworth-4-OVS")
+    # axs[4].plot(x, y_naive, 'r', label="naive-linear")
+    # axs[4].plot(x, y2, 'b', label="ADAA-butterworth-2")
+    # axs[4].plot(x, y4, 'black', label="ADAA-butterworth-4")
+    # axs[4].plot(x, y2_ds, 'green', label="ADAA-butterworth-2-OVS")
+    # axs[4].plot(x, y2_ds, 'purple', label="ADAA-butterworth-4-OVS")
 
 
     plt.grid(True, which="both")

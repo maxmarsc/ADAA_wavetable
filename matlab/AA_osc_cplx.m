@@ -126,7 +126,7 @@ function [y, I_sums] = AA_osc_cplx(x, resid, polo, fs, wave)
 endfunction
 
 % i tel que  x_i < x_0 < x_(i+1) && j_min <= i <= j_max
-%
+%            x_i_m1 < x_m1 < x_i
 function y = binary_search_down(x, x0, j_min, j_max)
     % index of last number in ordered vec x <= x0, among those between j_min, j_max. 
     % if x0 < x(1), return 0.
