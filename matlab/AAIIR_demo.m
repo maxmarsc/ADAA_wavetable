@@ -13,7 +13,7 @@ pkg load signal
 Fs = 44100;
 % waveform = "ESCALATION";
 waveform = "WAVETABLE_SAW";
-%waveform = "SAW";
+% waveform = "SAW";
 f0 = 1000;
 
 
@@ -30,7 +30,7 @@ function runbenchmark(Fs,f0,waveform,stopbdB,cutoff,order,type)
         stopbF = cutoff;
         [y, iirba] = AAIIROscCheby(time, stopbdB, stopbF, order, Fs, f0, waveform);
     elseif strcmp(type,'butter')
-        [y, iirba, I_sums] = AAIIROscButter(time, cutoff, order, Fs, f0, waveform);
+        [y, iirba] = AAIIROscButter(time, cutoff, order, Fs, f0, waveform);
     elseif strcmp(type,'ovs')
         y = OVSTrivial(time, f0, Fs, order, waveform);
     elseif strcmp(type,'trivial')
@@ -39,18 +39,25 @@ function runbenchmark(Fs,f0,waveform,stopbdB,cutoff,order,type)
         error('wrong method');
     end
 
+    % audiowrite("octave_cheby_test.wav", y, Fs, 'BitsPerSample',32)
+
     % figure, plot(y(1:100));
-    figure, plot(time(1:1100), y(1:1100), time(1:1100), I_sums(1:1100), time(1:1100), test_(1:1100));
+    figure, plot(time(1:1100), y(1:1100));
     % figure, plot(I_sums(1:100));
     ylim([-1 1]);
     legend(type);
+    % plot(time,10*log10(y));
+    [pxx, f] = pwelch(y,4096,[],[],Fs);
+    loglog(f, pxx);
+    plot(f, log2(pxx));
+    grid on;
 
 end
 
 
 %% DSP METHODS
 
-function [y,iirba, I_sums] = AAIIROscButter(n, cutoff, order, Fs, f0, waveform)
+function [y,iirba] = AAIIROscButter(n, cutoff, order, Fs, f0, waveform)
 
 Fc = cutoff; % [Hz]
 Fcrads = 2*pi*Fc / Fs; % [rad/sample]
@@ -63,14 +70,10 @@ L = length(n);
 x = (1:L)*f0/Fs;            % vector of x, evenly spaced
 
 y_aa = 0*x;
-I_sums = 0*x;
 for o = 1:2:order % poles are in conjg pairs, must take only one for each
     ri = r(o);
     zi = p(o);
-    [new_y, I_sum] = AA_osc_cplx(x, ri, zi, Fs, waveform);
-    y_aa = y_aa + new_y;
-    I_sums = I_sums + I_sum;
-    % y_aa = y_aa + AA_osc_cplx(x, ri, zi, Fs, waveform);
+    y_aa = y_aa + AA_osc_cplx(x, ri, zi, Fs, waveform);
 end
 
 y = y_aa;
@@ -84,7 +87,7 @@ function [y,iirba] = AAIIROscCheby(n, stbAtt, stbFreq, order, Fs, f0, waveform)
 x = 2 * f0 * mod(n,1/f0) - 1;
 
 Fc = stbFreq;
-Fcrads = pi*Fc / Fs;
+Fcrads = 2*pi*Fc / Fs;
 
 [z,p,k] = cheby2(order, stbAtt, Fcrads, 's');
 [b,a] = zp2tf(z,p,k);
@@ -97,9 +100,7 @@ y_aa = 0*x;
 for o = 1:2:order % poles are in conjg pairs, must take only one for each
     ri = r(o);
     zi = p(o); % the other is conjugated
-    [new_y, ~] = AA_osc_cplx(x, ri, zi, Fs, waveform);
-    y_aa = y_aa + new_y;
-    % y_aa = y_aa + AA_osc_cplx(x, ri, zi, Fs, waveform);
+    y_aa = y_aa + AA_osc_cplx(x, ri, zi, Fs, waveform);
 end
 
 y = y_aa;
@@ -164,14 +165,14 @@ end
 
 stopbF = 0.45 * Fs;
 order = 2;
-runbenchmark(Fs,f0,waveform,'',stopbF,order,'butter');
+% runbenchmark(Fs,f0,waveform,'',stopbF,order,'butter');
 
 %% AAIIR: CHEBYSHEV ORDER 10 (best antialiasing)
 
 stopbdB = 60;
 stopbF = 0.61 * Fs; 
 order = 10;
-% runbenchmark(Fs,f0,waveform,stopbdB,stopbF,order,'cheby2');
+runbenchmark(Fs,f0,waveform,stopbdB,stopbF,order,'cheby2');
 
 while waitforbuttonpress != 1
     continue;

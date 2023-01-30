@@ -1,4 +1,4 @@
-function [y, I_sums] = AA_osc_cplx(x, resid, polo, fs, wave)
+function [y] = AA_osc_cplx(x, resid, polo, fs, wave)
   
   % waveform info
   if strcmp(wave,'ESCALATION')
@@ -26,7 +26,6 @@ function [y, I_sums] = AA_osc_cplx(x, resid, polo, fs, wave)
   % y | list[scalar] : result
   %
   %%%
-  I_sums = x*0;
 
   
   T = X(end); % period
@@ -109,8 +108,6 @@ function [y, I_sums] = AA_osc_cplx(x, resid, polo, fs, wave)
     end
 
     I = (I + sign(x_diff) * I_sum)/beta^2;
-
-    I_sums(n) = I_sum;
     
     % See formula n°10
     y_hat = expbeta * y_hat_vz1 + 2 * B * I;

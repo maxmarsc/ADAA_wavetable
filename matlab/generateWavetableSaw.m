@@ -15,7 +15,8 @@ function [X, m, q, wt] = generateWavetableSaw()
     q = zeros(1,FRAMES);
 
     steps = 1.0/FRAMES;
-    phase = 0.5 + steps;
+    % phase = 0.5 + steps;
+    phase = 0;
 
     for i = 2:FRAMES
         wt(i) = 2.0 * phase - 1.0;
