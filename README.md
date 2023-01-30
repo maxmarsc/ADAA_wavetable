@@ -36,6 +36,6 @@ I was able to get good results with butterworth filtering, but not with Chebyshe
 For now I won't go any further because the computationnal cost would be too big for my embedded project and the results aren't good enough so far.
 
 If you wan't to discuess about it you can find me on :
- - [Discord](discordapp.com/users/Groumpf#2353)
+ - [Discord](https://discordapp.com/users/Groumpf#2353)
  - [Twitter](https://twitter.com/Groumpf_)
  - [Mastodon](https://piaille.fr/@groumpf)
