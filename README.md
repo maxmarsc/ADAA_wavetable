@@ -25,7 +25,7 @@ octave AAIIR_demo.m
 ## The python folder
 Most of my experiment were made in Python. I recoded the algorithm from matlab to python. Then I made a second version a bit simpler, focusing on making suitable for real time implementation (the base algorithm have some ever-increasing indexes which is kinda hard to support).
 
-Check `python/main.py` for the details, I tried
+Check `python/main.py` for the details, I tried to document it so it's self-explanatory.
 
 You can find the python requirements in the `requirements.txt` file. You might also need `libsoxr`.
 
