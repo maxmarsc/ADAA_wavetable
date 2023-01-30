@@ -2,3 +2,7 @@
 __pycache__
 python/__pycache__
 *.png
+matlab/octave-workspace
+octave-workspace
+.vscode
+venv
