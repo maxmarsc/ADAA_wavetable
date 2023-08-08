@@ -9,9 +9,8 @@ function [y] = AA_osc_cplx(x, resid, polo, fs, wave)
       % SAW
       X = [0,1];
       m = [2];
-      q = [-1];
-      
-  endif
+      q = [-1]; 
+  end
 
   %%%
   % X | list[scalar] E [0;1] : normalized sample position relative to the waveform length

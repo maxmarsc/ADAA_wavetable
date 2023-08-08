@@ -21,7 +21,7 @@ f0 = 1000;
 
 function runbenchmark(Fs,f0,waveform,stopbdB,cutoff,order,type)
     
-    duration = 0.1; % seconds
+    duration = 1.0; % seconds
 	time = linspace(0,duration,Fs*duration);
     test_ = zeros(length(time));
     test_(441) = -1.0;
@@ -39,7 +39,7 @@ function runbenchmark(Fs,f0,waveform,stopbdB,cutoff,order,type)
         error('wrong method');
     end
 
-    % audiowrite("octave_cheby_test.wav", y, Fs, 'BitsPerSample',32)
+    audiowrite("octave_cheby_test.wav", y*0.80, Fs, 'BitsPerSample',32)
 
     % figure, plot(y(1:100));
     figure, plot(time(1:1100), y(1:1100));
