@@ -1,4 +1,5 @@
 
+from collections import defaultdict
 import numpy as np
 from math import exp, floor
 from cmath import exp as cexp
@@ -10,12 +11,17 @@ import soundfile as sf
 import csv
 from pathlib import Path
 import matlab.engine
-import matlab.float
+import argparse
+from dataclasses import dataclass
+from multiprocessing import Pool
+import logging
 
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 
 from bl_waveform import bl_sawtooth
 from decimator import Decimator17, Decimator9
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 WAVEFORM_LEN = 4096
 SAMPLERATE = 44100
@@ -25,7 +31,10 @@ DURATION_S = 1.0
 CSV_OUTPUT = "benchmark.csv"
 
 matplotlib.use('TkAgg')
+logging.info("Starting matlab")
 MATLAB = matlab.engine.start_matlab()
+logging.info("matlab started")
+
 
 def compute_naive_saw(frames: int) -> np.ndarray:
     phase = 0.0
@@ -280,18 +289,20 @@ def compute_snr(noised_signal, clean_signal) -> float:
 #     return float(value)
 
 from enum import Enum
-class FilterType(Enum):
-    BUTTERWORTH = 1
-    CHEBYSHEV_TYPE2 = 2
+class Algorithm(Enum):
+    ADAA_BUTTERWORTH = 1
+    ADAA_CHEBYSHEV_TYPE2 = 2
+    NAIVE = 3
 
 def process_adaa(x: np.ndarray, m: np.ndarray, q:np.ndarray, m_diff: np.ndarray,
-                 q_diff: np.ndarray, ftype: FilterType,
+                 q_diff: np.ndarray, ftype: Algorithm,
                  forder:int, os_factor: int) -> Tuple[np.ndarray, str]:
     sr = SAMPLERATE * os_factor
     X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
 
 
-    if ftype == FilterType.BUTTERWORTH:
+    assert(ftype != Algorithm.NAIVE)
+    if ftype == Algorithm.ADAA_BUTTERWORTH:
         (r, p, _) = butter_coeffs(forder, BUTTERWORTH_CTF, sr)
         fname = "BT"
     else:
@@ -371,10 +382,75 @@ def generate_sweep_phase(f1, f2, t, fs):
 
 # def write_snr_to_cs
 # def main2():
-    # num_frames_total = int(DURATION_S * SAMPLERATE)
+    # num_frames_total = int(DURATION_S * SAMPLERATE)*
+# def work_at_freq(freqs: List[float], csv :bool, ovs : int = 1, write: bool = False):
+#     num_frames = int(DURATION_S * SAMPLERATE)
+#     for freq in freqs:
+#         x = np.linspace(0.0, num_frames*freq / SAMPLERATE, num_frames, endpoint=True)
+#         (m, q, m_diff, q_diff) = mq_from_waveform(waveform) 
+
+@dataclass
+class AlgorithmDetails:
+    algorithm: Algorithm
+    oversampling : int
+    forder: int
+
+    @property
+    def name(self) -> str:
+        name = ""
+        if self.algorithm is Algorithm.NAIVE:
+            name += "naive"
+        else:
+            name += "ADAA"
+            if self.algorithm is Algorithm.ADAA_BUTTERWORTH:
+                name += "_BT"
+            else:
+                name += "_CH"
+            name += "_order_{}".format(self.forder)
+        
+        if self.oversampling > 1:
+            name += "_OVSx{}".format(self.oversampling)
+        
+        return name
+    
+    def name_with_freq(self, freq: int) -> str:
+        return self.name + "_{}Hz".format(freq)
+
+# def main():
 
 
-def main(play_freq = 200, log=True, to_csv=False):
+def routine(details: AlgorithmDetails, x, freq: int) -> Tuple[str, int, np.ndarray[float]]:
+    waveform = NAIVE_SAW
+    name = details.name_with_freq(freq)
+    # print("Computing {}".format(name))
+    logging.info("{} : started".format(name))
+    if details.algorithm is Algorithm.NAIVE:
+        generated = process_naive(x, waveform, details.oversampling)[0]
+    else:
+        (m, q, m_diff, q_diff) = mq_from_waveform(waveform)
+        generated = process_adaa(x, m, q, m_diff, q_diff, details.algorithm, details.forder, os_factor=details.oversampling)[0]
+
+    logging.info("{} : end".format(name))
+    return [name, freq, generated]
+
+
+def plot_psd(time_signals : Dict[str, np.ndarray[float]]):
+    fig, axs = plt.subplots(len(time_signals) + 1)
+
+    # Plot all psd
+    for i, (name, signal) in enumerate(time_signals.items()):
+        axs[i].psd(signal, label=name, Fs=SAMPLERATE, NFFT=4096)
+        axs[-1].plot(signal, label=name)
+    
+    for ax in axs:
+        ax.grid(True, which="both")
+        ax.legend()
+
+    plt.show()
+
+    
+
+def process_for_freq(play_freq:float, log: bool, to_csv: bool):
     # play_freq = 200
 
     num_frames_total = int(DURATION_S * SAMPLERATE)
@@ -412,8 +488,8 @@ def main(play_freq = 200, log=True, to_csv=False):
 
     y_naive = process_naive(x, waveform, 1)
     y_naive_x8 = process_naive(x_x8, waveform, 8)
-    y_bt2 = process_adaa(x, m, q, m_diff, q_diff, FilterType.BUTTERWORTH, 2, 1)
-    y_ch10 = process_adaa(x, m, q, m_diff, q_diff, FilterType.CHEBYSHEV_TYPE2, 10, 1)
+    y_bt2 = process_adaa(x, m, q, m_diff, q_diff, Algorithm.ADAA_BUTTERWORTH, 2, 1)
+    y_ch10 = process_adaa(x, m, q, m_diff, q_diff, Algorithm.ADAA_CHEBYSHEV_TYPE2, 10, 1)
 
 
 
@@ -879,7 +955,7 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
     return y
 
-def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
+def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
     """
     Direct translation from the matlab algorithm to python. Be aware matlab arrays starts at 1 so I had to make
     a few changes
@@ -1005,8 +1081,123 @@ def process(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
 
 
-
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Script with optional arguments")
+
+     # Define the mode argument as a choice between "psd", "snr", and "sweep"
+    parser.add_argument("mode", choices=["psd", "snr", "sweep"],
+                        help="Choose a mode: psd, snr, or sweep")
+
+    # Define the export argument as a choice between "snr", "thd", and "both"
+    parser.add_argument("--export", choices=["snr", "thd", "both"], default="both",
+                        help="Choose what to export: snr, thd, or both (default)")
+
+
+    # parser.add_argument("destination", nargs="?", default=Path.cwd(), type=Path,
+    #                     help="Output destination")
+    # parser.add_argument("--no-log", action="store_true", help="Disable console logging")
+    # parser.add_argument("--csv", action="store_true", help="Enable output in CSV format")
+
+    args = parser.parse_args()
+    
+    # FREQS = [197, 397, 597, 997, 1599, 2173, 3003, 3997]
+    # FREQS = np.int32(np.logspace(start=5, stop=14, num=25, base=2))
+    FREQS = [600]
+    print(FREQS)
+    ALGOS_OPTIONS = [
+        AlgorithmDetails(Algorithm.NAIVE, 1, 0),
+        # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
+        AlgorithmDetails(Algorithm.NAIVE, 8, 0),
+        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
+        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
+        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
+        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
+        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 4),
+        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10),
+    ]
+    sorted_bl = dict()
+
+
+    # OVS_FACTORS = [1, 2, 4, 8]
+
+    # Prepare parallel run
+    logging.info("Setting up phase vectors")
+    routine_args = []
+    # names = []
+    for freq in FREQS:
+        while SAMPLERATE % freq == 0:
+            freq -= 3
+        sorted_bl[freq] = bl_sawtooth(np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq)
+        for options in ALGOS_OPTIONS:
+            num_frames = int(DURATION_S * SAMPLERATE * options.oversampling)
+            x = np.linspace(0.0, DURATION_S*freq, num_frames, endpoint=True)
+            routine_args.append([options, x, freq])
+            # names.append(options.name() + "_{}Hz".format(freq))
+    
+    # Run generating in parallel
+    with Pool(19) as pool:
+        results = pool.starmap(routine, routine_args)
+
+
+    # names = [res[0] for res in results]
+
+    if args.mode == "snr":
+        # Compute SNRs
+        logging.info("Computing SNRs")
+        for res in results:
+            # print(res[0], res[2].shape)
+            res.append(MATLAB.snr(res[2], SAMPLERATE))
+
+        if not args.no_log:
+            logging.info("Logging SNR")
+            for (name, freq, data, snr_value) in results:
+                print("{} SNR : {}".format(name, snr_value))
+    elif args.mode == "psd":
+        logging.info("Plotting psd")
+
+        signals = {name: signal for name, _, signal in results}
+        plot_psd(signals)
+    else:
+        # TODO: sweep
+        pass
+
+    # Write to CSV
+    if args.csv:
+        assert(args.destination is not None)
+
+        logging.info("Writing to CSV")
+        # Sort data for csv
+        sorted_results = defaultdict(list)
+        sorted_thd = defaultdict(list)
+        for [name, freq, data, snr_value] in results:
+            sorted_results[freq].append(snr_value)
+            sorted_thd[freq].append(compute_snr(data, sorted_bl[freq]))
+
+        csv_output = args.destination / CSV_OUTPUT
+        with open(csv_output, "w") as csv_file:
+            csvwriter = csv.writer(csv_file)
+            names = [opt.name for opt in ALGOS_OPTIONS]
+            csvwriter.writerow(["frequency", *names])
+
+            for freq, snr_values in sorted_results.items():
+                csvwriter.writerow([freq, *snr_values])
+
+        thd_output = args.destination / "thd.csv"
+        with open(thd_output, "w") as csv_file:
+            csvwriter = csv.writer(csv_file)
+            names = [opt.name for opt in ALGOS_OPTIONS]
+            csvwriter.writerow(["frequency", *names])
+
+            for freq, thd_values in sorted_thd.items():
+                csvwriter.writerow([freq, *thd_values])
+
+        
+
+    
+
+    
+
+
     # with open(CSV_OUTPUT, "w") as csv_file:
     #     csvwriter = csv.writer(csv_file)
     #     names = [
@@ -1032,6 +1223,6 @@ if __name__ == "__main__":
     #     print("Calling main with {}:{}".format(i, freq))
     #     main(freq, False, True)
 
-    for freq in [200, 600, 1000, 4000]:
-        main(play_freq=freq)
+    # for freq in [200, 600, 1000, 4000]:
+    #     main(play_freq=freq)
     # main()
