@@ -35,7 +35,7 @@ matplotlib.use('TkAgg')
 # MATLAB = matlab.engine.start_matlab()
 # logging.info("matlab started")
 
-
+@njit
 def compute_naive_saw(frames: int) -> np.ndarray:
     phase = 0.0
     waveform = np.zeros(frames)
@@ -52,7 +52,8 @@ def compute_naive_sin(frames: int) -> np.ndarray:
     phase = np.linspace(0, 2 * np.pi, frames, endpoint=False)
     return np.sin(phase)
 
-def noteToFreq(note):
+@njit
+def noteToFreq(note: int) -> float:
     a = 440 #frequency of A (coomon value is 440Hz)
     return (a / 32) * (2 ** ((note - 9) / 12))
 
@@ -80,13 +81,16 @@ def cheby_coeffs(order, ctf, attn, samplerate) -> Tuple[np.ndarray[complex], np.
     (r, p, _) =  residue(b, a)
     return (r, p, (b,a))
 
-def compute_m(x0, x1, y0, y1):
+@njit
+def compute_m(x0: float, x1: float, y0: float, y1: float) -> float:
     return (y1 - y0) / (x1 - x0)
 
-def compute_q(x0, x1, y0, y1):
+@njit
+def compute_q(x0: float, x1: float, y0: float, y1: float) -> float:
     return (y0 * (x1 - x0) - x0 * (y1 - y0)) / (x1 - x0)
 
-def compute_m_q_vectors(waveform, X):
+@njit
+def compute_m_q_vectors(waveform: np.ndarray, X: np.ndarray):
     """
     Compute the m & q vectors needed by the paper algorithm. In the paper they have waveformq they know the shape of in 
     advance. This function allows you to compute m & q for any kind of waveform
@@ -312,14 +316,22 @@ def process_adaa(x: np.ndarray, m: np.ndarray, q:np.ndarray, m_diff: np.ndarray,
         zi = p[order]
         y += process_fwd(x, ri, zi, X, m, q, m_diff, q_diff)
 
-    if os_factor == 2:
-        ds_size = int(y.shape[0] / os_factor)
-        y_ds = np.zeros((ds_size,))
-        decimator = Decimator9()
-        for i in range(ds_size):
-            y_ds[i] = decimator.process(y[i*2], y[i*2 + 1])
-        y = y_ds
-    elif os_factor != 1:
+    # if os_factor == 2:
+    #     ds_size = int(y.shape[0] / os_factor)
+    #     y_ds = np.zeros((ds_size,))
+    #     decimator = Decimator9()
+    #     for i in range(ds_size):
+    #         y_ds[i] = decimator.process(y[i*2], y[i*2 + 1])
+    #     y = y_ds
+    # elif os_factor != 1:
+    #     # Downsampling
+    #     y = soxr.resample(
+    #         y,
+    #         SAMPLERATE * os_factor,
+    #         SAMPLERATE,
+    #         quality="HQ"
+    #     )
+    if os_factor != 1:
         # Downsampling
         y = soxr.resample(
             y,
