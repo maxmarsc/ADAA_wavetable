@@ -10,11 +10,11 @@ import soxr
 import soundfile as sf
 import csv
 from pathlib import Path
-import matlab.engine
 import argparse
 from dataclasses import dataclass
 from multiprocessing import Pool
 import logging
+from numba import jit, njit
 
 from typing import Tuple, List, Dict
 
@@ -31,9 +31,9 @@ DURATION_S = 1.0
 CSV_OUTPUT = "benchmark.csv"
 
 matplotlib.use('TkAgg')
-logging.info("Starting matlab")
-MATLAB = matlab.engine.start_matlab()
-logging.info("matlab started")
+# logging.info("Starting matlab")
+# MATLAB = matlab.engine.start_matlab()
+# logging.info("matlab started")
 
 
 def compute_naive_saw(frames: int) -> np.ndarray:
@@ -51,6 +51,10 @@ def compute_naive_saw(frames: int) -> np.ndarray:
 def compute_naive_sin(frames: int) -> np.ndarray:
     phase = np.linspace(0, 2 * np.pi, frames, endpoint=False)
     return np.sin(phase)
+
+def noteToFreq(note):
+    a = 440 #frequency of A (coomon value is 440Hz)
+    return (a / 32) * (2 ** ((note - 9) / 12))
 
 NAIVE_SAW = compute_naive_saw(WAVEFORM_LEN)
 NAIVE_SAW_X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
@@ -128,7 +132,7 @@ def compute_m_q_vectors(waveform, X):
     
     return (m, q)
 
-
+@njit
 def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int:
     """
     return i as x_i < x_0 < x_(i+1) && j_min <= i <= j_max
@@ -152,7 +156,7 @@ def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int
         else:
             return j_min
 
-
+@njit
 def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
     """
     return i as x_i > x_0 > x_(i+1) && j_min <= i <= j_max
@@ -174,7 +178,7 @@ def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
         else:
             return j_max
 
-
+@njit
 def process_naive_linear(waveform, x_values):
     """
     Linear interpolation algorithm
@@ -198,9 +202,12 @@ def process_naive_linear(waveform, x_values):
         if relative_idx == prev_idx:
             y[i] = waveform[prev_idx]
         else:
-            a = (waveform[next_idx] - waveform[prev_idx]) / (next_idx - prev_x)
-            b = (waveform[next_idx] * (next_idx - prev_x) - prev_x * (waveform[next_idx] - waveform[prev_idx])) / (next_idx - prev_x)
-            y[i] = a * x + b
+            a = (waveform[next_idx] - waveform[prev_idx]) / (next_idx - prev_idx)
+            b = waveform[prev_idx] - prev_idx * a
+            y[i] = a * relative_idx + b  
+            # a = (waveform[next_idx] - waveform[prev_idx]) / (next_idx - prev_x)
+            # b = (waveform[next_idx] * (next_idx - prev_x) - prev_x * (waveform[next_idx] - waveform[prev_idx])) / (next_idx - prev_x)
+            # y[i] = a * x + b
 
         prev_x = x
     
@@ -316,7 +323,14 @@ def process_adaa(x: np.ndarray, m: np.ndarray, q:np.ndarray, m_diff: np.ndarray,
         zi = p[order]
         y += process_fwd(x, ri, zi, X, m, q, m_diff, q_diff)
 
-    if os_factor != 1:
+    if os_factor == 2:
+        ds_size = int(y.shape[0] / os_factor)
+        y_ds = np.zeros((ds_size,))
+        decimator = Decimator9()
+        for i in range(ds_size):
+            y_ds[i] = decimator.process(y[i*2], y[i*2 + 1])
+        y = y_ds
+    elif os_factor != 1:
         # Downsampling
         y = soxr.resample(
             y,
@@ -324,6 +338,7 @@ def process_adaa(x: np.ndarray, m: np.ndarray, q:np.ndarray, m_diff: np.ndarray,
             SAMPLERATE,
             quality="HQ"
         )
+
 
     name = "ADAA {} order {}".format(fname, forder)
     if os_factor != 1:
@@ -351,6 +366,7 @@ def process_naive(x: np.ndarray, waveform: np.ndarray, os_factor: int) -> Tuple[
     
     return (y, name)
 
+@njit
 def generate_sweep_phase(f1, f2, t, fs):
     # Calculate the number of samples
     n = int(t * fs)
@@ -871,6 +887,7 @@ def mod_bar(x, k):
     m = x % k
     return m + k * (1 - np.sign(m))
 
+@njit
 def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
     """
     This is a simplified version of the process method translated from matlab, more suited to real time use :
@@ -1089,21 +1106,31 @@ if __name__ == "__main__":
                         help="Choose a mode: psd, snr, or sweep")
 
     # Define the export argument as a choice between "snr", "thd", and "both"
-    parser.add_argument("--export", choices=["snr", "thd", "both"], default="both",
+    parser.add_argument("--export", choices=["snr", "thd", "both", "none"], default="both",
                         help="Choose what to export: snr, thd, or both (default)")
+    parser.add_argument("--export-dir", type=Path, default=Path.cwd())
+    parser.add_argument("--export-audio", action="store_true")
+    parser.add_argument("--no-log", action="store_true", help="Disable console logging")
 
 
     # parser.add_argument("destination", nargs="?", default=Path.cwd(), type=Path,
     #                     help="Output destination")
-    # parser.add_argument("--no-log", action="store_true", help="Disable console logging")
     # parser.add_argument("--csv", action="store_true", help="Enable output in CSV format")
 
     args = parser.parse_args()
+
+    import matlab.engine
+    future_engine = matlab.engine.start_matlab(background=True)
     
     # FREQS = [197, 397, 597, 997, 1599, 2173, 3003, 3997]
-    # FREQS = np.int32(np.logspace(start=5, stop=14, num=25, base=2))
-    FREQS = [600]
-    print(FREQS)
+    # FREQS = np.int32(np.logspace(start=5, stop=14, num=100, base=2))
+    # FREQS = np.int32(np.linspace(start=32, stop=3500, num=200))
+    FREQS = [noteToFreq(i) for i in range(21, 109)]
+    # FREQS = range(3643, 3733)
+
+    # FREQS = np.linspace(60, )
+    # FREQS = [120]
+    # print(FREQS)
     ALGOS_OPTIONS = [
         AlgorithmDetails(Algorithm.NAIVE, 1, 0),
         # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
@@ -1111,9 +1138,9 @@ if __name__ == "__main__":
         AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
+        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 4),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10),
+        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10),
     ]
     sorted_bl = dict()
 
@@ -1125,8 +1152,18 @@ if __name__ == "__main__":
     routine_args = []
     # names = []
     for freq in FREQS:
-        while SAMPLERATE % freq == 0:
-            freq -= 3
+        # dist = SAMPLERATE % freq
+        # if dist < 3.0 or abs(freq - dist) < 3.0:
+        #     print("Skipping {} Hz" .format(freq))
+        #     continue
+
+        # while SAMPLERATE % freq == 0:
+        #     print("Skipping {} Hz" .format(freq))
+        #     freq -= 3
+        # if freq in sorted_bl:
+        #     print("Duplicate {} Hz".format(freq))
+        #     continue
+
         sorted_bl[freq] = bl_sawtooth(np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq)
         for options in ALGOS_OPTIONS:
             num_frames = int(DURATION_S * SAMPLERATE * options.oversampling)
@@ -1142,11 +1179,14 @@ if __name__ == "__main__":
     # names = [res[0] for res in results]
 
     if args.mode == "snr":
+        engine = future_engine.result()
+
         # Compute SNRs
         logging.info("Computing SNRs")
         for res in results:
+            num_harmonics = max(2, floor(SAMPLERATE / 2 / res[1]))
             # print(res[0], res[2].shape)
-            res.append(MATLAB.snr(res[2], SAMPLERATE))
+            res.append(engine.snr(res[2], SAMPLERATE, num_harmonics))
 
         if not args.no_log:
             logging.info("Logging SNR")
@@ -1161,19 +1201,25 @@ if __name__ == "__main__":
         # TODO: sweep
         pass
 
-    # Write to CSV
-    if args.csv:
-        assert(args.destination is not None)
+    if args.export != "none" or args.export_audio:
+        args.export_dir.mkdir(parents=True, exist_ok=True)
 
-        logging.info("Writing to CSV")
+    if args.export_audio:
+        for [name, freq, data, snr_value] in results:
+            filename = name + ".wav"
+            sf.write(args.export_dir / filename, data, SAMPLERATE)
+
+    # Write to CSV
+    if args.export in ("snr", "both"):
+        assert(args.export_dir is not None)
+
+        logging.info("Exporting SNR to CSV")
         # Sort data for csv
         sorted_results = defaultdict(list)
-        sorted_thd = defaultdict(list)
         for [name, freq, data, snr_value] in results:
             sorted_results[freq].append(snr_value)
-            sorted_thd[freq].append(compute_snr(data, sorted_bl[freq]))
 
-        csv_output = args.destination / CSV_OUTPUT
+        csv_output = args.export_dir / CSV_OUTPUT
         with open(csv_output, "w") as csv_file:
             csvwriter = csv.writer(csv_file)
             names = [opt.name for opt in ALGOS_OPTIONS]
@@ -1182,7 +1228,12 @@ if __name__ == "__main__":
             for freq, snr_values in sorted_results.items():
                 csvwriter.writerow([freq, *snr_values])
 
-        thd_output = args.destination / "thd.csv"
+    if args.export in ("thd", "both"):
+        sorted_thd = defaultdict(list)
+        for [name, freq, data, snr_value] in results:
+            sorted_thd[freq].append(compute_snr(data, sorted_bl[freq]))
+
+        thd_output = args.export_dir / "thd.csv"
         with open(thd_output, "w") as csv_file:
             csvwriter = csv.writer(csv_file)
             names = [opt.name for opt in ALGOS_OPTIONS]
