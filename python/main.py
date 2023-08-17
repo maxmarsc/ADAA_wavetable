@@ -921,13 +921,13 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script with optional arguments")
 
-     # Define the mode argument as a choice between "psd", "snr", and "sweep"
-    parser.add_argument("mode", choices=["psd", "snr", "sweep"],
-                        help="Choose a mode: psd, snr, or sweep")
+     # Define the mode argument as a choice between "psd", "metrics", and "sweep"
+    parser.add_argument("mode", choices=["psd", "metrics", "sweep"],
+                        help="Choose a mode: psd, metrics, or sweep")
 
-    # Define the export argument as a choice between "snr", "thd", and "both"
+    # Define the export argument as a choice between "snr", "sinad", and "both"
     parser.add_argument("--export", choices=["snr", "sinad", "both", "none"], default="both",
-                        help="Choose what to export: snr, thd, or both (default)")
+                        help="Choose what to export: snr, sinad, or both (default)")
     parser.add_argument("--export-dir", type=Path, default=Path.cwd())
     parser.add_argument("--export-audio", action="store_true")
     parser.add_argument("--no-log", action="store_true", help="Disable console logging")
@@ -935,7 +935,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.mode != "snr":
+    if args.mode != "metrics":
         args.export = "none"
 
     import matlab.engine
@@ -978,7 +978,7 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=4096),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
+        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=1024),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=512),
@@ -1072,7 +1072,7 @@ if __name__ == "__main__":
     with Pool(19) as pool:
         results = pool.starmap(routine, routine_args)
 
-    if args.mode == "snr":
+    if args.mode == "metrics":
         # engine = future_engine.result()
         import matlab.engine
         engine = matlab.engine.start_matlab()
