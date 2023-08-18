@@ -31,8 +31,9 @@ WAVEFORM_LEN = 4096
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
-DURATION_S = 20.0
-CSV_OUTPUT = "benchmark.csv"
+DURATION_S = 1.0
+NUM_PROCESS = 19
+# CSV_OUTPUT = "benchmark.csv"
 
 matplotlib.use('TkAgg')
 # logging.info("Starting matlab")
@@ -370,6 +371,39 @@ def compute_sinad(noised_signal: np.ndarray, clean_signal: np.ndarray, fundament
 
     return sinad_db
 
+@njit
+def fast_compute_sinad(noised_fft: np.ndarray, clean_fft: np.ndarray, fundamental: float) -> float:
+    assert(noised_fft.shape == clean_fft.shape)
+
+    fft_size = noised_fft.shape[0]
+    bin_size = SAMPLERATE / 2 / (fft_size - 1)
+
+    # Expected bin for the fundamental frequency
+    expected_fundamental_bin = int(np.round(fundamental / bin_size))
+
+    # Search around the expected bin for the true peak
+    search_range = 5  # 5 bins on either side
+    fundamental_bin = expected_fundamental_bin + np.argmax(np.abs(clean_fft[expected_fundamental_bin - search_range:expected_fundamental_bin + search_range + 1])) - search_range
+
+    # Check fundamental frequency
+    val = np.argmax(np.abs(clean_fft))
+    assert(val == fundamental_bin)
+
+    # Compute Harmonic Distortion
+    harmonics = [i * fundamental_bin for i in range(1, fft_size // fundamental_bin)]
+    hd_power = np.sum(np.array([(np.abs(noised_fft[h]) - np.abs(clean_fft[h]))**2 for h in harmonics]))
+    
+    # Compute Noise
+    noise_bins = [i for i in range(len(noised_fft)//2) if i not in harmonics and i != fundamental_bin]
+    noise_power = np.sum(np.array([(np.abs(noised_fft[n]) - np.abs(clean_fft[n]))**2 for n in noise_bins]))
+
+    # Compute SINAD
+    signal_power = np.abs(clean_fft[fundamental_bin])**2
+    sinad_value = signal_power / (hd_power + noise_power)
+    sinad_db = 10 * np.log10(sinad_value)
+
+    return sinad_db
+
 from enum import Enum
 class Algorithm(Enum):
     ADAA_BUTTERWORTH = 1
@@ -502,7 +536,7 @@ def process_naive(x: np.ndarray, waveform: np.ndarray, os_factor: int) -> Tuple[
     
     return (y, name)
 
-@njit
+# @njit
 def generate_sweep_phase(f1, f2, t, fs):
     # Calculate the number of samples
     n = int(t * fs)
@@ -592,7 +626,7 @@ def plot_specgram(time_signals: Dict[str, np.ndarray[float]]):
     fig, axs = plt.subplots(len(time_signals))
 
     for i, (name, data) in enumerate(time_signals.items()):
-        axs[i].specgram(data, NFFT=1024, noverlap=512, vmin=-80)
+        axs[i].specgram(data, NFFT=512, noverlap=256, vmin=-80)
         axs[i].set_title(name)
         axs[i].set_ylabel('Frequency [Hz]')
         axs[i].set_xlabel('Time [s]')
@@ -655,16 +689,6 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
             j_red = binary_search_down(X_mipmap[mipmap_idx], x_red, 0, X_mipmap[mipmap_idx].shape[0] - 1)
             prev_j_red = j_red + int(np.sign(x_red - X_mipmap[mipmap_idx][j_red]))
 
-
-        # prev_j_red = j_red % waveform_frames    # !!! relative
-
-        # # TODO: No idea ?
-        # if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
-        #     # If on the same slop as the previous iteration
-        #     prev_j_red = j_red + int(np.sign(x_red - X[j_red]))
-        #     # Is used to avoid computing a new j_min using the binary search, because
-        #     # if j_min == j_max then the I sum is zero so its corresponds to the case
-        #     # where x_n and x_n+1 are in the same interval
         
         x_red = x[n] % 1.0
 
@@ -960,11 +984,11 @@ if __name__ == "__main__":
     # FREQS = [(2**i - 1, 2**i, 2**  +1) for i in range(4, 15)]
     # print(FREQS)
     ALGOS_OPTIONS = [
-        AlgorithmDetails(Algorithm.NAIVE, 1, 0),
+        # AlgorithmDetails(Algorithm.NAIVE, 1, 0),
         # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
+        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=4096),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
@@ -976,10 +1000,10 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=32),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=4096),
-        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
+        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=True),
-        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10),
+        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
+        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 8),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=1024),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=512),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=256),
@@ -1042,7 +1066,13 @@ if __name__ == "__main__":
                 cache = naive_caches[options.waveform_len]
             routine_args.append([options, x, cache])
     else:
-        for freq in FREQS:
+        bl_gen_args = [
+            [np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq] for freq in FREQS
+        ]
+        with Pool(NUM_PROCESS) as pool:
+            bl_results = pool.starmap(bl_sawtooth, bl_gen_args)
+
+        for i, freq in enumerate(FREQS):
             # dist = SAMPLERATE % freq
             # if dist < 3.0 or abs(freq - dist) < 3.0:
             #     print("Skipping {} Hz" .format(freq))
@@ -1055,7 +1085,8 @@ if __name__ == "__main__":
             #     print("Duplicate {} Hz".format(freq))
             #     continue
 
-            sorted_bl[freq] = bl_sawtooth(np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq)
+            # sorted_bl[freq] = bl_sawtooth(np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq)
+            sorted_bl[freq] = bl_results[i]
             for options in ALGOS_OPTIONS:
                 if options.mipmap and options.algorithm != Algorithm.NAIVE:
                     cache = mipmap_cache
@@ -1069,8 +1100,13 @@ if __name__ == "__main__":
                 routine_args.append([options, x, cache, freq])
     
     # Run generating in parallel
-    with Pool(19) as pool:
+    with Pool(NUM_PROCESS) as pool:
         results = pool.starmap(routine, routine_args)
+
+    # Delete caches to free memory
+    del mipmap_caches
+    del adaa_caches
+    del naive_caches
 
     if args.mode == "metrics":
         # engine = future_engine.result()
@@ -1126,11 +1162,25 @@ if __name__ == "__main__":
             for freq, snr_values in sorted_results.items():
                 csvwriter.writerow([freq, *snr_values])
 
+        del sorted_results
+
     if args.export in ("sinad", "both"):
         sorted_sinad = defaultdict(list)
-        for [name, freq, data, snr_value] in results:
-            sorted_sinad[freq].append(compute_sinad(data, sorted_bl[freq], freq))
+        sinad_args = [
+            [normalized_fft(data), normalized_fft(sorted_bl[freq]), freq] for (_, freq, data, _) in results
+        ]
+        logging.info("Computing SINADs")
+        with Pool(8) as pool:
+            sinad_values = pool.starmap(fast_compute_sinad, sinad_args)
 
+        for i, freq in enumerate(FREQS):
+            sorted_sinad[freq].append(sinad_values[i])
+        # for [name, freq, data, snr_value] in results:
+        #     noised_fft = normalized_fft(data)
+        #     clean_fft = normalized_fft(sorted_bl[freq])
+        #     sorted_sinad[freq].append(fast_compute_sinad(noised_fft, clean_fft, freq))
+
+        logging.info("Exporting SINAD to CSV")
         thd_output = args.export_dir / (args.export_dir.name + "_sinad.csv")
         with open(thd_output, "w") as csv_file:
             csvwriter = csv.writer(csv_file)

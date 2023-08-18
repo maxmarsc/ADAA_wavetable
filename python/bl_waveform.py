@@ -1,8 +1,10 @@
 from __future__ import division
 from numpy import asarray, zeros, pi, sin, cos, amax, diff, arange, outer
+import numpy as np
+from numba import njit
 
 # see https://gist.github.com/endolith/407991
-
+@njit
 def bl_sawtooth(x, play_freq): # , width=1
     """
     Return a periodic band-limited sawtooth wave with
@@ -20,11 +22,11 @@ def bl_sawtooth(x, play_freq): # , width=1
     if abs((t[-1]-t[-2]) - (t[1]-t[0])) > .0000001:
         raise ValueError("Sampling frequency must be constant")
 
-    if t.dtype.char in ['fFdD']:
-        ytype = t.dtype.char
-    else:
-        ytype = 'd'
-    y = zeros(t.shape, ytype)
+    # if t.dtype.char in ['fFdD']:
+    #     ytype = t.dtype.char
+    # else:
+    #     ytype = 'd'
+    y = zeros(t.shape, dtype=np.float32)
 
     # Get sampling frequency from timebase
     fs =  1 / (t[1] - t[0])
