@@ -123,12 +123,12 @@ def compute_m_q_vectors(waveform: np.ndarray):
     m & q definitions found in the paper (ie : in the paper they do have non-linearities in m & q).
     """
     size = waveform.shape[0]
-    # slope_thrsd = size / 2
+    # slope_thrsd = size / 64
+    # idx_to_estimate = []
     m = np.zeros(size)
     q = np.zeros(size)
     X = np.linspace(0, 1, waveform.shape[0] + 1)
 
-    # idx_to_estimate = []
 
     for i in range(size - 1):
         y0 = waveform[i]
@@ -139,7 +139,7 @@ def compute_m_q_vectors(waveform: np.ndarray):
         q_i = compute_q(x0, x1, y0, y1)
 
         # if abs(m_i) > slope_thrsd:
-        #     print("Exceeded threshold at idx {} of waveform {}".format(i, waveform.shape[0]))
+        #     # print("Exceeded threshold at idx {} of waveform {}".format(i, waveform.shape[0]))
         #     idx_to_estimate.append(i)
         #     continue
 
@@ -483,7 +483,7 @@ def process_adaa_mipmap(x: List[np.ndarray], cache: MipMapAdaaCache,
     for order in range(0, forder, 2):
         ri = r[order]
         zi = p[order]
-        y += process_fwd_mipmap(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
+        y += process_fwd_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
 
     if os_factor == 2:
         ds_size = int(y.shape[0] / os_factor)
@@ -626,7 +626,7 @@ def plot_specgram(time_signals: Dict[str, np.ndarray[float]]):
     fig, axs = plt.subplots(len(time_signals))
 
     for i, (name, data) in enumerate(time_signals.items()):
-        axs[i].specgram(data, NFFT=512, noverlap=256, vmin=-80)
+        axs[i].specgram(data, NFFT=512, noverlap=256, vmin=-80, Fs=44100)
         axs[i].set_title(name)
         axs[i].set_ylabel('Frequency [Hz]')
         axs[i].set_xlabel('Time [s]')
@@ -721,6 +721,8 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
         # See formula (10)
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
         y[n] = y_cpx.real
+        assert(abs(y[n]) < 3.0)
+
 
         prev_x = x[n]
 
@@ -729,6 +731,152 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
         prev_mipmap_idx = mipmap_idx
 
     return y
+
+@njit
+def mipmap_xfade(mipmap_values: List[np.ndarray[float]], 
+                 mipmap_xfading_values: Tuple[int, float, int, float],
+                 idx: int,
+                 summing = False) -> float:
+    idx_crt, weight_crt, idx_next, weight_next = mipmap_xfading_values
+    assert(weight_crt + weight_next == 1.0)
+    if weight_next == 0.0:
+        return mipmap_values[idx_crt][idx]
+    else:
+        assert(idx_crt +1 == idx_next)
+        return weight_crt * mipmap_values[idx_crt][idx] + weight_next * mipmap_values[idx_next][idx//2]
+
+@njit
+def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[float]], 
+                       m_mipmap: List[np.ndarray[float]], q_mipmap: List[np.ndarray[float]], 
+                       m_diff_mipmap: List[np.ndarray[float]], q_diff_mipmap: List[np.ndarray[float]], 
+                       mipmap_scale: np.ndarray[float]):
+    """
+    This is a simplified version of the process method translated from matlab, more suited to real time use :
+
+     - Assuming the playback will only goes forward (no reverse playing), I removed the conditionnal branching on x_diff
+
+     - I replaced the formulas using ever-growing indexes and phase with equivalent ones using only "reduced" variables:
+        1. (prev_x - T * floor(j_min/ waveform_frames)) became prev_x_red_bar
+        2. (x[n] - T * floor((j_max+1)/waveform_frames)) is equivalent to x_red
+        3. (x[n] - T * floor((i)/waveform_frames)) became x_red_bar
+
+    see process() for the original "translation" from matlab code
+    """
+    y = np.zeros(x.shape[0])
+
+    # Period - should be 1
+    for phases in X_mipmap:
+        assert(phases[-1] == 1.0)
+
+    expbeta = cexp(beta)
+
+    # Initial condition
+    prev_x = x[0]
+    prev_cpx_y: complex = 0
+
+    # Setting j indexs and some reduced values
+    x_red = prev_x % 1.0
+    x_diff = x[1] - x[0]
+    mipmap_xfade_idxs = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
+    prev_mipmap_idx = mipmap_xfade_idxs[0]
+    j_red = binary_search_down(X_mipmap[prev_mipmap_idx], x_red, 0, X_mipmap[prev_mipmap_idx].shape[0] - 1)
+
+    for n in range(1, x.shape[0]):
+        # loop init
+        x_diff = x[n] - prev_x
+        assert(x_diff >= 0)
+
+        mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
+        waveform_frames = m_mipmap[mipmap_idx].shape[0]     # aka k
+        prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
+        
+        if mipmap_idx != prev_mipmap_idx:
+            if mipmap_idx == prev_mipmap_idx + 1:
+                # Going up in frequencies
+                j_red = j_red // 2
+            else:
+                # Going down in frequencies
+                j_red = j_red * 2 + (X_mipmap[mipmap_idx][j_red * 2 + 1] < x_red)
+            assert(j_red == binary_search_down(X_mipmap[mipmap_idx], x_red, 0, X_mipmap[mipmap_idx].shape[0] - 1))
+        prev_j_red = j_red + int(np.sign(x_red - X_mipmap[mipmap_idx][j_red]))
+
+        
+        x_red = x[n] % 1.0
+
+        # playback going forward
+        j_red = binary_search_down(X_mipmap[mipmap_idx], x_red, 0, X_mipmap[mipmap_idx].shape[0] - 1)
+
+        j_max_p_red = j_red
+        j_min_red = (prev_j_red - 1) % waveform_frames
+
+
+        prev_x_red_bar = prev_x % 1.0
+        prev_x_red_bar += (prev_x_red_bar == 0.0)
+
+        I_crt = compute_I(m_mipmap[mipmap_idx],
+                          q_mipmap[mipmap_idx],
+                          m_diff_mipmap[mipmap_idx],
+                          q_diff_mipmap[mipmap_idx],
+                          X_mipmap[mipmap_idx],
+                          j_min_red, j_max_p_red,
+                          beta, expbeta, x_diff, prev_x_red_bar, x_red)
+        
+
+        if weight_up != 0.0:
+            jmin_up = j_min_red // 2
+            jmax_up = j_max_p_red // 2
+
+            # -- Only to make sure I didn't made a mistake in index computation
+            ref_max = binary_search_down(X_mipmap[mipmap_idx_up], x_red, 0, X_mipmap[mipmap_idx_up].shape[0] - 1)
+            prev_x_red = x[n-1] % 1.0
+            ref_prev_j_red = binary_search_down(X_mipmap[mipmap_idx_up], prev_x_red, 0, X_mipmap[mipmap_idx_up].shape[0] - 1)
+            ref_prev_j_red = ref_prev_j_red + int(np.sign(prev_x_red - X_mipmap[mipmap_idx_up][ref_prev_j_red]))
+            ref_min = (ref_prev_j_red -1 ) % m_mipmap[mipmap_idx_up].shape[0]
+            assert(jmin_up == ref_min)
+            assert(jmax_up == ref_max)
+            # ---
+
+            I_up = compute_I(m_mipmap[mipmap_idx_up],
+                               q_mipmap[mipmap_idx_up],
+                                m_diff_mipmap[mipmap_idx_up],
+                                q_diff_mipmap[mipmap_idx_up],
+                                X_mipmap[mipmap_idx_up],
+                                jmin_up, jmax_up,
+                                beta, expbeta, x_diff, prev_x_red_bar, x_red)
+            I_crt = I_crt * weight + weight_up * I_up
+            
+        y_cpx: complex = expbeta * prev_cpx_y + 2 * B * (I_crt / (beta ** 2))
+        # y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I_crt
+        y[n] = y_cpx.real
+
+
+        prev_x = x[n]
+
+        prev_cpx_y = y_cpx
+        prev_x_diff = x_diff
+        prev_mipmap_idx = mipmap_idx
+
+    return y
+
+@njit
+def compute_I(m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, prev_x_red_bar, x_red) -> complex:
+    frames = m.shape[0]
+    I = expbeta\
+        * (m[jmin] * x_diff + beta * (m[jmin] * prev_x_red_bar + q[jmin]))\
+        - m[jmax] * x_diff\
+        - beta * (m[jmax] * x_red + q[jmax])
+
+    I_sum = 0
+    born_sup = jmax + frames * (jmin > jmax)
+    for i in range(jmin, born_sup):
+        i_red = i % frames
+        x_red_bar = x_red + (x_red < X[i_red])
+
+        I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
+                    * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
+        
+    # return (I + np.sign(x_diff) * I_sum) / (beta**2)
+    return I + I_sum
 
 
 @njit
@@ -972,9 +1120,10 @@ if __name__ == "__main__":
     FREQS = [noteToFreq(i) for i in range(128)]
     # FREQS = range(4000, 4200)
     # FREQS = np.linspace(60, )
-    # FREQS = [1010]
+    # FREQS = [685, 686, 687]
 
-    # FREQS = [3997]
+    # FREQS = [23.1246514194771]
+    # FREQS = [110]
     # for i in range(4, 16):
     #     FREQS.append(2**i -1)
     #     FREQS.append(2**i)
@@ -988,7 +1137,7 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
-        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
+        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=4096),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
@@ -1000,7 +1149,7 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=32),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=4096),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
+        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 8),
@@ -1036,7 +1185,9 @@ if __name__ == "__main__":
     if any(opt.mipmap and opt.algorithm != Algorithm.NAIVE for opt in ALGOS_OPTIONS):
         # Init mipmap cache
         scale = mipmap_scale(waveform.size, SAMPLERATE, 9)
-        mipmap_waveforms = compute_mipmap_waveform(waveform.get(), len(scale) + 1)
+        mipmap_waveforms = [
+            waveform.get(waveform.size / (2**i)) for i in range(len(scale) + 1)
+        ]
         (m, q, m_diff, q_diff) = mipmap_mq_from_waveform(mipmap_waveforms)
         mipmap_cache = MipMapAdaaCache(m,q, m_diff, q_diff, scale)
 
@@ -1057,7 +1208,9 @@ if __name__ == "__main__":
 
     if args.mode == "sweep":
         for options in ALGOS_OPTIONS:
-            x = generate_sweep_phase(20, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
+            x = generate_sweep_phase(200, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
+            # x = generate_sweep_phase(SAMPLERATE / 2, 200, DURATION_S, SAMPLERATE * options.oversampling)
+            # x = np.linspace(0.0, DURATION_S*5510, int(DURATION_S * SAMPLERATE * options.oversampling), endpoint=True)
             if options.mipmap and options.algorithm != Algorithm.NAIVE:
                 cache = mipmap_cache
             elif not options.mipmap and options.algorithm != Algorithm.NAIVE:
@@ -1085,7 +1238,6 @@ if __name__ == "__main__":
             #     print("Duplicate {} Hz".format(freq))
             #     continue
 
-            # sorted_bl[freq] = bl_sawtooth(np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq)
             sorted_bl[freq] = bl_results[i]
             for options in ALGOS_OPTIONS:
                 if options.mipmap and options.algorithm != Algorithm.NAIVE:
@@ -1097,6 +1249,7 @@ if __name__ == "__main__":
 
                 num_frames = int(DURATION_S * SAMPLERATE * options.oversampling)
                 x = np.linspace(0.0, DURATION_S*freq, num_frames, endpoint=True)
+                # x = generate_sweep_phase(200, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
                 routine_args.append([options, x, cache, freq])
     
     # Run generating in parallel
@@ -1141,7 +1294,7 @@ if __name__ == "__main__":
     if args.export_audio:
         for res in results:
             filename = res[0] + ".wav"
-            sf.write(args.export_dir / filename, res[2] * 0.70, SAMPLERATE)
+            sf.write(args.export_dir / filename, res[2] * 0.50, SAMPLERATE, subtype="FLOAT")
 
     # Write to CSV
     if args.export in ("snr", "both"):
@@ -1173,19 +1326,20 @@ if __name__ == "__main__":
         with Pool(8) as pool:
             sinad_values = pool.starmap(fast_compute_sinad, sinad_args)
 
-        for i, freq in enumerate(FREQS):
+        for i, (_, freq, _, _) in enumerate(results):
             sorted_sinad[freq].append(sinad_values[i])
+
         # for [name, freq, data, snr_value] in results:
         #     noised_fft = normalized_fft(data)
         #     clean_fft = normalized_fft(sorted_bl[freq])
         #     sorted_sinad[freq].append(fast_compute_sinad(noised_fft, clean_fft, freq))
 
         logging.info("Exporting SINAD to CSV")
-        thd_output = args.export_dir / (args.export_dir.name + "_sinad.csv")
-        with open(thd_output, "w") as csv_file:
+        sinad_output = args.export_dir / (args.export_dir.name + "_sinad.csv")
+        with open(sinad_output, "w") as csv_file:
             csvwriter = csv.writer(csv_file)
             names = [opt.name for opt in ALGOS_OPTIONS]
             csvwriter.writerow(["frequency", *names])
 
-            for freq, thd_values in sorted_sinad.items():
-                csvwriter.writerow([freq, *thd_values])
+            for freq, sinad_values in sorted_sinad.items():
+                csvwriter.writerow([freq, *sinad_values])

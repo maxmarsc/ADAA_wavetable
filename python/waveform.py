@@ -5,12 +5,12 @@ from pathlib import Path
 
 from math import log2
 from enum import Enum
+import samplerate
 
 from numba import njit
 
 class Waveform:
     def __init__(self, data: np.ndarray, samplerate: int):
-        # data, sr = sf.read(path, dtype=np.float32)
         self.__data = data
         self.__sr = samplerate
     
@@ -24,30 +24,24 @@ class Waveform:
         else:
             ratio = float(size / self.size)
             o_sr = self.__sr * ratio
-            # return self.__resample(ratio)
-            resampled = soxr.resample(
-                self.__data,
-                self.size,
-                size,
-                quality="VHQ"
-            )
-            return resampled / np.abs(np.max(resampled))
+            return self.__resample(ratio)
         
     def __resample(self, ratio: float) -> np.ndarray[float]:
-        triple = np.zeros(self.size * 3)
+        repetitions = 3
+        extended = np.zeros(self.size * repetitions)
         o_sr = self.__sr * ratio
         o_size = int(np.floor(self.size * ratio))
-        for i in range(3):
-            triple[self.size*i: self.size*(i+1)] = self.__data
+        for i in range(repetitions):
+            extended[self.size*i: self.size*(i+1)] = self.__data
 
         resampled = soxr.resample(
-            triple,
-            self.__sr,
-            o_sr,
+            extended,
+            self.size,
+            o_size,
             quality="VHQ"
         )
 
-        return resampled[o_size: o_size*2]
+        return resampled[o_size*(repetitions//2): o_size*(repetitions//2 + 1)]
 
         
 class FileWaveform(Waveform):
@@ -86,6 +80,9 @@ class NaiveWaveform(Waveform):
             waveform[i] = 2.0 * phase - 1
             phase = (phase + step) % 1.0
 
+        dc_offset = np.mean(waveform)
+        waveform -= dc_offset
+
         return waveform
     
     @staticmethod
@@ -106,9 +103,12 @@ class NaiveWaveform(Waveform):
 if __name__ == "__main__":
     wave = NaiveWaveform(NaiveWaveform.Type.SAW, 2048, 44100)
 
-    sizes = (2048, 512, 256, 128, 64, 32)
+    sizes = (2048, 64, 32, 16, 8, 4)
 
     waves = [wave.get(size) for size in sizes]
+
+    for w in waves:
+        print(w.shape)
 
     # wave_og = wave.get()
     # wave_1024 = wave.get(1024)
@@ -125,8 +125,19 @@ if __name__ == "__main__":
 
     for i, ax in enumerate(axs.flat):
         waveform = waves[i]
-        print("{} : {}".format(waveform.shape[0], np.max(np.abs(waveform))))
+        print("{} : {}".format(waveform.shape[0], np.mean(waveform)))
         ax.plot(waveform, label="{}".format(waveform.shape[0]))
+
+        # size = waveform.shape[0]
+        # triple = np.zeros(size * 100)
+        # for i in range(100):
+        #     triple[size*i: size*(i+1)] = waveform
+
+        # triple *= np.blackman(triple.shape[0])
+
+        # ax.psd(triple, label="{}".format(waveform.shape[0]))
+
+
         ax.legend()
     # axs[0].plot(wave_og, label="2048")
     # axs[1].plot(wave_1024, label="1024")
