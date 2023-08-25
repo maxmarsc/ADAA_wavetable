@@ -31,7 +31,7 @@ WAVEFORM_LEN = 4096
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
-DURATION_S = 1.0
+DURATION_S = 5.0
 NUM_PROCESS = 19
 # CSV_OUTPUT = "benchmark.csv"
 
@@ -234,6 +234,46 @@ def process_naive_linear(waveform, x_values):
             y[i] = a * relative_idx + b  
     
     return y
+
+@njit
+def process_naive_hermite(waveform, x_values):
+    """
+    Hermite interpolation algorithm
+
+    Based on ADC21 talk by Matt Tytel, who based himself
+    on implementation by Laurent de Soras
+
+    https://www.youtube.com/watch?v=qlinVx60778
+    """
+
+    y = np.zeros(x_values.shape[0])
+    waveform_len = waveform.shape[0]
+
+    for (i, x) in enumerate(x_values):
+        x_red = x % 1.0
+
+        relative_idx = x_red * waveform_len
+        idx_0 = (floor(relative_idx) - 1) % waveform_len
+        idx_1 = floor(relative_idx)
+        idx_2 = (floor(relative_idx) + 1 ) % waveform_len
+        idx_3 = (floor(relative_idx) + 2 ) % waveform_len
+
+        sample_offset = relative_idx - idx_1
+
+        slope_0 = (waveform[idx_2] - waveform[idx_0]) * 0.5
+        slope_1 = (waveform[idx_3] - waveform[idx_1]) * 0.5
+
+        v = waveform[idx_1] - waveform[idx_2]
+        w = slope_0 + v
+        a = w + v + slope_1
+        b_neg = w + a
+        stage_1 = a * sample_offset - b_neg
+        stage_2 = stage_1 * sample_offset + slope_0
+        y[i] = stage_2 * sample_offset + waveform[idx_1]
+        # assert(y[i] != np.NaN)
+
+    return y
+
 
 def snr(noised_signal_fft, perfect_signal_fft):
     magnitude_noise = np.abs(noised_signal_fft) - np.abs(perfect_signal_fft)
@@ -519,7 +559,9 @@ def process_adaa_mipmap(x: List[np.ndarray], cache: MipMapAdaaCache,
 
 def process_naive(x: np.ndarray, waveform: np.ndarray, os_factor: int) -> Tuple[np.ndarray, str]:
     # Waveform generation
-    y = process_naive_linear(waveform, x)
+    # y = process_naive_linear(waveform, x)
+    y = process_naive_hermite(waveform, x)
+    assert(np.isnan(y).any() == False)
 
     if os_factor != 1:
         # Downsampling
@@ -536,7 +578,7 @@ def process_naive(x: np.ndarray, waveform: np.ndarray, os_factor: int) -> Tuple[
     
     return (y, name)
 
-# @njit
+@njit
 def generate_sweep_phase(f1, f2, t, fs):
     # Calculate the number of samples
     n = int(t * fs)
@@ -1114,16 +1156,16 @@ if __name__ == "__main__":
     # future_engine = matlab.engine.start_matlab(background=True)
     
     # FREQS = [197, 397, 597, 997, 1599, 2173, 3003, 3997]
-    # FREQS = np.int32(np.logspace(start=5, stop=14, num=200, base=2))
+    FREQS = np.int32(np.logspace(start=5, stop=14.4, num=200, base=2))
     # FREQS = np.int32(np.linspace(start=2**5, stop=2**14, num=200))
     # FREQS = [noteToFreq(i) for i in range(21, 109)]
-    FREQS = [noteToFreq(i) for i in range(128)]
+    # FREQS = [noteToFreq(i) for i in range(128)]
     # FREQS = range(4000, 4200)
     # FREQS = np.linspace(60, )
     # FREQS = [685, 686, 687]
 
     # FREQS = [23.1246514194771]
-    # FREQS = [110]
+    # FREQS = [4794]
     # for i in range(4, 16):
     #     FREQS.append(2**i -1)
     #     FREQS.append(2**i)
@@ -1133,7 +1175,7 @@ if __name__ == "__main__":
     # FREQS = [(2**i - 1, 2**i, 2**  +1) for i in range(4, 15)]
     # print(FREQS)
     ALGOS_OPTIONS = [
-        # AlgorithmDetails(Algorithm.NAIVE, 1, 0),
+        AlgorithmDetails(Algorithm.NAIVE, 1, 0),
         # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
@@ -1149,8 +1191,8 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=32),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=4096),
-        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10),
-        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=True),
+        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8),
+        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 8),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=1024),
@@ -1208,7 +1250,7 @@ if __name__ == "__main__":
 
     if args.mode == "sweep":
         for options in ALGOS_OPTIONS:
-            x = generate_sweep_phase(200, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
+            x = generate_sweep_phase(20, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
             # x = generate_sweep_phase(SAMPLERATE / 2, 200, DURATION_S, SAMPLERATE * options.oversampling)
             # x = np.linspace(0.0, DURATION_S*5510, int(DURATION_S * SAMPLERATE * options.oversampling), endpoint=True)
             if options.mipmap and options.algorithm != Algorithm.NAIVE:
@@ -1222,7 +1264,7 @@ if __name__ == "__main__":
         bl_gen_args = [
             [np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq] for freq in FREQS
         ]
-        with Pool(NUM_PROCESS) as pool:
+        with Pool(4) as pool:
             bl_results = pool.starmap(bl_sawtooth, bl_gen_args)
 
         for i, freq in enumerate(FREQS):
@@ -1253,7 +1295,7 @@ if __name__ == "__main__":
                 routine_args.append([options, x, cache, freq])
     
     # Run generating in parallel
-    with Pool(NUM_PROCESS) as pool:
+    with Pool(20) as pool:
         results = pool.starmap(routine, routine_args)
 
     # Delete caches to free memory
@@ -1270,6 +1312,11 @@ if __name__ == "__main__":
         logging.info("Computing SNRs")
         for res in results:
             num_harmonics = max(2, floor(SAMPLERATE / 2 / res[1]))
+            # print("SNR : ", res[2].shape, res[2].dtype, np.isnan(res[2]).any())
+            # if np.isnan(res[2]).any():
+            #     print("NaN found : ", res[0], res[1])
+            #     exit(1)
+
             res.append(engine.snr(res[2], SAMPLERATE, num_harmonics))
 
         if not args.no_log:
