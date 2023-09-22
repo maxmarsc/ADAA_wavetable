@@ -31,7 +31,7 @@ WAVEFORM_LEN = 4096
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
-DURATION_S = 5.0
+DURATION_S = 1.0
 NUM_PROCESS = 19
 # CSV_OUTPUT = "benchmark.csv"
 
@@ -80,6 +80,13 @@ def compute_naive_sin(frames: int) -> np.ndarray:
 def noteToFreq(note: int) -> float:
     a = 440 #frequency of A (coomon value is 440Hz)
     return (a / 32) * (2 ** ((note - 9) / 12))
+
+@njit
+def fast_floor(fval: float):
+    ival = int(fval)
+    if float(ival) > fval:
+        return ival - 1
+    return ival
 
 NAIVE_SAW = compute_naive_saw(WAVEFORM_LEN)
 NAIVE_SAW_X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
@@ -165,14 +172,14 @@ def compute_m_q_vectors(waveform: np.ndarray):
 @njit
 def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int:
     """
-    return i as x_i < x_0 < x_(i+1) && j_min <= i <= j_max
+    return i as x_i < x_0 < x_(i+1) && j_min <= i <= j_max (or j_max - 1)
     """
     if x0 < x[0]:
         return -1           # Should it be -1 ? 0 in matlab so it's weird
     elif x0 >= x[j_max]:
         return j_max - 1
     else:
-        i_mid = floor((j_min + j_max)/2)
+        i_mid = fast_floor((j_min + j_max)/2)
 
         if x0 < x[i_mid]:
             j_max = i_mid
@@ -196,7 +203,7 @@ def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
     elif x0 <= x[0]:
         return 0
     else:
-        i_mid = floor((j_min + j_max)/2)
+        i_mid = fast_floor((j_min + j_max)/2)
 
         if x0 < x[i_mid]:
             j_max = i_mid
@@ -223,7 +230,7 @@ def process_naive_linear(waveform, x_values):
         x_red = x % 1.0
         relative_idx = x_red * waveform_len
 
-        prev_idx = floor(relative_idx)
+        prev_idx = fast_floor(relative_idx)
         next_idx = (prev_idx + 1) % waveform_len
 
         if relative_idx == prev_idx:
@@ -253,10 +260,10 @@ def process_naive_hermite(waveform, x_values):
         x_red = x % 1.0
 
         relative_idx = x_red * waveform_len
-        idx_0 = (floor(relative_idx) - 1) % waveform_len
-        idx_1 = floor(relative_idx)
-        idx_2 = (floor(relative_idx) + 1 ) % waveform_len
-        idx_3 = (floor(relative_idx) + 2 ) % waveform_len
+        idx_0 = (fast_floor(relative_idx) - 1) % waveform_len
+        idx_1 = fast_floor(relative_idx)
+        idx_2 = (fast_floor(relative_idx) + 1 ) % waveform_len
+        idx_3 = (fast_floor(relative_idx) + 2 ) % waveform_len
 
         sample_offset = relative_idx - idx_1
 
@@ -301,7 +308,7 @@ def downsample_x2_decim17(y_2x: np.ndarray[float]) -> np.ndarray[float]:
     """
     2x decimate with a 17 residuals coefficient decimator
     """
-    new_size = floor(y_2x.shape[0] / 2)
+    new_size = fast_floor(y_2x.shape[0] / 2)
     y = np.zeros(new_size)
     decimator = Decimator17()
 
@@ -414,6 +421,7 @@ def compute_sinad(noised_signal: np.ndarray, clean_signal: np.ndarray, fundament
 @njit
 def fast_compute_sinad(noised_fft: np.ndarray, clean_fft: np.ndarray, fundamental: float) -> float:
     assert(noised_fft.shape == clean_fft.shape)
+    assert(noised_fft.shape[0] > 0)
 
     fft_size = noised_fft.shape[0]
     bin_size = SAMPLERATE / 2 / (fft_size - 1)
@@ -421,13 +429,18 @@ def fast_compute_sinad(noised_fft: np.ndarray, clean_fft: np.ndarray, fundamenta
     # Expected bin for the fundamental frequency
     expected_fundamental_bin = int(np.round(fundamental / bin_size))
 
-    # Search around the expected bin for the true peak
-    search_range = 5  # 5 bins on either side
-    fundamental_bin = expected_fundamental_bin + np.argmax(np.abs(clean_fft[expected_fundamental_bin - search_range:expected_fundamental_bin + search_range + 1])) - search_range
+    # # Search around the expected bin for the true peak
+    # search_range = 5  # 5 bins on either side
+    # beg_range = max(0, expected_fundamental_bin - search_range)
+    # end_range = min(noised_fft.shape[0], expected_fundamental_bin + search_range + 1)
+    # fundamental_bin = expected_fundamental_bin + np.argmax(np.abs(clean_fft[beg_range:end_range])) - search_range
 
-    # Check fundamental frequency
-    val = np.argmax(np.abs(clean_fft))
-    assert(val == fundamental_bin)
+    # # Check fundamental frequency
+    # val = np.argmax(np.abs(clean_fft))
+    # assert(val == fundamental_bin)
+
+    # Not that slow and less buggy 
+    fundamental_bin = np.argmax(np.abs(clean_fft))
 
     # Compute Harmonic Distortion
     harmonics = [i * fundamental_bin for i in range(1, fft_size // fundamental_bin)]
@@ -821,7 +834,9 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
     x_diff = x[1] - x[0]
     mipmap_xfade_idxs = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
     prev_mipmap_idx = mipmap_xfade_idxs[0]
-    j_red = binary_search_down(X_mipmap[prev_mipmap_idx], x_red, 0, X_mipmap[prev_mipmap_idx].shape[0] - 1)
+    # j_red = binary_search_down(X_mipmap[prev_mipmap_idx], x_red, 0, X_mipmap[prev_mipmap_idx].shape[0] - 1)
+    waveform_frames = m_mipmap[prev_mipmap_idx].shape[0]
+    j_red = floor(x_red * waveform_frames)
 
     for n in range(1, x.shape[0]):
         # loop init
@@ -846,7 +861,8 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
         x_red = x[n] % 1.0
 
         # playback going forward
-        j_red = binary_search_down(X_mipmap[mipmap_idx], x_red, 0, X_mipmap[mipmap_idx].shape[0] - 1)
+        j_red = floor(x_red * waveform_frames)
+        assert(j_red == binary_search_down(X_mipmap[mipmap_idx], x_red, 0, waveform_frames))
 
         j_max_p_red = j_red
         j_min_red = (prev_j_red - 1) % waveform_frames
@@ -1156,16 +1172,16 @@ if __name__ == "__main__":
     # future_engine = matlab.engine.start_matlab(background=True)
     
     # FREQS = [197, 397, 597, 997, 1599, 2173, 3003, 3997]
-    FREQS = np.int32(np.logspace(start=5, stop=14.4, num=200, base=2))
+    # FREQS = np.int32(np.logspace(start=5, stop=14.4, num=200, base=2))
     # FREQS = np.int32(np.linspace(start=2**5, stop=2**14, num=200))
-    # FREQS = [noteToFreq(i) for i in range(21, 109)]
+    FREQS = [noteToFreq(i) for i in range(21, 109)]
     # FREQS = [noteToFreq(i) for i in range(128)]
     # FREQS = range(4000, 4200)
     # FREQS = np.linspace(60, )
     # FREQS = [685, 686, 687]
 
     # FREQS = [23.1246514194771]
-    # FREQS = [4794]
+    # FREQS = [460]
     # for i in range(4, 16):
     #     FREQS.append(2**i -1)
     #     FREQS.append(2**i)
@@ -1179,7 +1195,7 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
+        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=4096),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
@@ -1264,7 +1280,8 @@ if __name__ == "__main__":
         bl_gen_args = [
             [np.linspace(0, DURATION_S, num = int(DURATION_S * SAMPLERATE), endpoint = False), freq] for freq in FREQS
         ]
-        with Pool(4) as pool:
+        logging.info("Computing band limited versions")
+        with Pool(NUM_PROCESS) as pool:
             bl_results = pool.starmap(bl_sawtooth, bl_gen_args)
 
         for i, freq in enumerate(FREQS):
@@ -1295,7 +1312,7 @@ if __name__ == "__main__":
                 routine_args.append([options, x, cache, freq])
     
     # Run generating in parallel
-    with Pool(20) as pool:
+    with Pool(NUM_PROCESS) as pool:
         results = pool.starmap(routine, routine_args)
 
     # Delete caches to free memory
@@ -1370,8 +1387,11 @@ if __name__ == "__main__":
             [normalized_fft(data), normalized_fft(sorted_bl[freq]), freq] for (_, freq, data, _) in results
         ]
         logging.info("Computing SINADs")
-        with Pool(8) as pool:
-            sinad_values = pool.starmap(fast_compute_sinad, sinad_args)
+        sinad_values = [
+            fast_compute_sinad(*args) for args in sinad_args
+        ]
+        # with Pool(8) as pool:
+        #     sinad_values = pool.starmap(fast_compute_sinad, sinad_args)
 
         for i, (_, freq, _, _) in enumerate(results):
             sorted_sinad[freq].append(sinad_values[i])
