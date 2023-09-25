@@ -524,6 +524,7 @@ def process_adaa_mipmap(x: List[np.ndarray], cache: MipMapAdaaCache,
                         ftype: Algorithm, forder:int, os_factor: int) -> Tuple[np.ndarray, str]:
     sr = SAMPLERATE * os_factor
     X =[np.linspace(0, 1, vec.shape[0] + 1, endpoint=True) for vec in cache.m_mipmap]
+    x = np.mod(x, 1.0)
 
 
     assert(ftype != Algorithm.NAIVE)
