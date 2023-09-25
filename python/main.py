@@ -1,7 +1,7 @@
 
 from collections import defaultdict
 import numpy as np
-from math import exp, floor
+from math import exp, floor, ceil
 from cmath import exp as cexp
 from scipy.signal import welch, butter, cheby2, residue, freqs, zpk2tf, windows, spectrogram
 import matplotlib.pyplot as plt
@@ -31,7 +31,7 @@ WAVEFORM_LEN = 4096
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
-DURATION_S = 1.0
+DURATION_S = 5.0
 NUM_PROCESS = 19
 # CSV_OUTPUT = "benchmark.csv"
 
@@ -468,7 +468,7 @@ def process_adaa(x: np.ndarray, cache: AdaaCache, ftype: Algorithm,
     sr = SAMPLERATE * os_factor
     waveform_len = cache.m.shape[0]
     X = np.linspace(0, 1, waveform_len + 1, endpoint=True)
-    
+    x = np.mod(x, 1.0)
 
 
     assert(ftype != Algorithm.NAIVE)
@@ -539,8 +539,8 @@ def process_adaa_mipmap(x: List[np.ndarray], cache: MipMapAdaaCache,
     for order in range(0, forder, 2):
         ri = r[order]
         zi = p[order]
-        y += process_fwd_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
-        # y += process_bi_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
+        # y += process_fwd_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
+        y += process_bi_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
 
 
     if os_factor == 2:
@@ -836,6 +836,11 @@ def process_bi_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[flo
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
+        if x_diff < -0.5:
+            x_diff += 1.0
+        elif x_diff > 0.5:
+            x_diff -= 1.0
+
         mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
         waveform_frames = m_mipmap[mipmap_idx].shape[0]     # aka k
 
@@ -853,41 +858,42 @@ def process_bi_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[flo
         
         x_red = x[n] % 1.0
 
-        j_red = floor(x_red * waveform_frames)
+        # j_red = floor(x_red * waveform_frames)
         if x_diff >= 0:
             # playback going forward
+            j_red = floor(x_red * waveform_frames)
             jmax = j_red
             jmin = prev_j_red
         else:
             # playback going backward
+            j_red = ceil(x_red * waveform_frames)
             jmax = prev_j_red
             jmin = j_red
 
-        j_min_red = (jmin - 1) % waveform_frames
-        j_max_p_red = jmax % waveform_frames
+        jmin_red = (jmin - 1) % waveform_frames
+        jmax_p_red = jmax % waveform_frames
 
-        prev_x_red_bar = prev_x % 1.0
-        prev_x_red_bar += (prev_x_red_bar == 0.0)
+        prev_x_red = prev_x % 1.0
 
         I_crt = compute_I_bi(m_mipmap[mipmap_idx],
                 q_mipmap[mipmap_idx],
                 m_diff_mipmap[mipmap_idx],
                 q_diff_mipmap[mipmap_idx],
                 X_mipmap[mipmap_idx],
-                j_min_red, j_max_p_red,
-                beta, expbeta, x_diff, prev_x_red_bar, x_red)
+                jmin, jmin_red, jmax_p_red,
+                beta, expbeta, x_diff, prev_x_red, x_red)
         
         if weight_up != 0.0:
-            jmin_up = j_min_red // 2
-            jmax_up = j_max_p_red // 2
+            jmin_red_up = jmin_red // 2
+            jmax_p_red_up = jmax_p_red // 2
 
             I_up = compute_I_bi(m_mipmap[mipmap_idx_up],
                                q_mipmap[mipmap_idx_up],
                                 m_diff_mipmap[mipmap_idx_up],
                                 q_diff_mipmap[mipmap_idx_up],
                                 X_mipmap[mipmap_idx_up],
-                                jmin_up, jmax_up,
-                                beta, expbeta, x_diff, prev_x_red_bar, x_red)
+                                jmin, jmin_red_up, jmax_p_red_up,
+                                beta, expbeta, x_diff, prev_x_red, x_red)
             I_crt = I_crt * weight + weight_up * I_up
             
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * (I_crt / (beta ** 2))
@@ -1038,24 +1044,33 @@ def compute_I_fwd(m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, pr
     return I + I_sum
 
 @njit
-def compute_I_bi(m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, prev_x_red_bar, x_red) -> complex:
+def compute_I_bi(m, q, m_diff, q_diff, X, jmin, jmin_red, jmax_p_red, beta, expbeta, x_diff, prev_x_red, x_red) -> complex:
     frames = m.shape[0]
-    if x_diff > 0 :
-        I = expbeta\
-            * (m[jmin] * x_diff + beta * (m[jmin] * prev_x_red_bar + q[jmin]))\
-            - m[jmax] * x_diff\
-            - beta * (m[jmax] * x_red + q[jmax])
+    prev_x_red_bar = prev_x_red + (prev_x_red == 0.0) * (x_diff > 0)
+    x_red_bar = x_red + (x_red == 0.0) * (x_diff < 0)
+
+    if x_diff > 0:
+        idx_prev_bound = jmin_red
+        idx_next_bound = jmax_p_red
     else:
-        I = expbeta\
-            * (m[jmax] * x_diff + beta * (m[jmax] * prev_x_red_bar + q[jmin]))\
-            - m[jmin] * x_diff\
-            - beta * (m[jmin] * x_red + q[jmin])
+        idx_prev_bound = jmax_p_red
+        idx_next_bound = jmin_red
+
+    I =  expbeta\
+            * (m[idx_prev_bound] * x_diff + beta * (m[idx_prev_bound] * prev_x_red_bar + q[idx_prev_bound]))\
+            - m[idx_next_bound] * x_diff\
+            - beta * (m[idx_next_bound] * x_red_bar + q[idx_next_bound])
+
 
     I_sum = 0
-    born_sup = jmax + frames * (jmin > jmax)
-    for i in range(jmin, born_sup):
+    born_sup = jmax_p_red + frames * (jmin_red > jmax_p_red)
+    if x_diff < 0 and jmin != 0 and jmin_red > jmax_p_red:
+        cycle_offset = -1.0
+    else:
+        cycle_offset = 0.0
+    for i in range(jmin_red, born_sup):
         i_red = i % frames
-        x_red_bar = x_red + (x_red < X[i_red])
+        x_red_bar = x_red + cycle_offset + (i_red > jmax_p_red)
 
         I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
                     * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
@@ -1065,7 +1080,7 @@ def compute_I_bi(m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, pre
 
 
 @njit
-def process_fwd_red(x, B, beta: complex, X, m, q, m_diff, q_diff):
+def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
     """
     This is a simplified version of the process method translated from matlab, more suited to real time use :
 
@@ -1168,57 +1183,117 @@ def process_bi_red(x, B, beta: complex, X, m, q, m_diff, q_diff):
     # Setting j indexs and some reduced values
     x_red = prev_x % 1.0
     j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
+    __j = waveform_frames * floor(prev_x / 1.0) + j_red - 1
+    __jred = j_red
 
 
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
-        assert(x_diff >= 0)
-        prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
+        if x_diff > 0.5 :
+            x_diff -= 1
+        elif x_diff < -0.5:
+            x_diff += 1
+        # prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
         prev_j_red = j_red % waveform_frames
+        __prevj = __j
 
+
+        # TODO: No idea ?
         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
             prev_j_red = j_red + int(np.sign(x_red - X[j_red]))
+            __prevj = __j + int(np.sign(x_red - X[__jred]))
             # Is used to avoid computing a new j_min using the binary search, because
             # if j_min == j_max then the I sum is zero so its corresponds to the case
             # where x_n and x_n+1 are in the same interval
         
         x_red = x[n] % 1.0
 
-        j_red = floor(x_red * waveform_frames)
+        # j_red = floor(x_red * waveform_frames)
         if x_diff >= 0:
             # playback going forward
+            j_red = floor(x_red * waveform_frames)
             jmax = j_red
             jmin = prev_j_red
+
+            # OG
+            __jred = floor(x_red * waveform_frames)
+            __j = waveform_frames * floor(x[n] / 1.0) + __jred - 1
+            __jmin = __prevj
+            __jmax = __j
         else:
             # playback going backward
+            j_red = ceil(x_red * waveform_frames)
             jmax = prev_j_red
             jmin = j_red
 
+            # OG
+            __jred = ceil(x_red * waveform_frames)
+            __j = waveform_frames * floor(x[n] / 1.0) + __jred - 1
+            __jmin = __j
+            __jmax = __prevj
+
         j_min_red = (jmin - 1) % waveform_frames
         j_max_p_red = jmax % waveform_frames
+        __jminred = __jmin % waveform_frames
+        __jmaxpred = (__jmax + 1) % waveform_frames
+        assert(j_min_red == __jminred)
+        assert(j_max_p_red == __jmaxpred)
 
         prev_x_red_bar = prev_x % 1.0
-        prev_x_red_bar += (prev_x_red_bar == 0.0)
+        prev_x_red_bar += (prev_x_red_bar == 0.0) * (x_diff >= 0)
+
+        # Check the values of prev_x_red_bar
+        if x_diff >= 0:
+            ref = prev_x -  floor(__jmin/ waveform_frames)
+            assert(prev_x_red_bar == ref)
+        else:
+            ref = prev_x -  floor((__jmax+1)/waveform_frames)
+            assert(prev_x_red_bar == ref)
+
+        # Check the values of x_red_bar2
+        x_red_bar2 = x_red + (x_red == 0.0) * (x_diff < 0)
+        if x_diff >= 0:
+            ref = x[n] - floor((__jmax+1)/waveform_frames)
+            assert(x_red_bar2 == ref)
+        else:
+            ref = x[n] - floor(__jmin/waveform_frames)
+            assert(x_red_bar2 == ref)
 
         if x_diff >= 0:
             I = expbeta\
                     * (m[j_min_red] * x_diff + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red]))\
                     - m[j_max_p_red] * x_diff\
-                    - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
+                    - beta * (m[j_max_p_red] * x_red_bar2 + q[j_max_p_red])
         else:
             I = expbeta\
                     * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * prev_x_red_bar + q[j_max_p_red]))\
                     - m[j_min_red] * x_diff\
-                    - beta * (m[j_min_red] * x_red + q[j_min_red])
+                    - beta * (m[j_min_red] * x_red_bar2 + q[j_min_red])
+
 
         I_sum = 0
         born_sup = j_max_p_red + waveform_frames * (j_min_red > j_max_p_red)
+        if x_diff < 0 and jmin != 0 and j_min_red > j_max_p_red:
+            cycle_offset = -1.0
+        else:
+            cycle_offset = 0.0
+
+        # Checking the sum bounds
+        # assert(born_sup - j_min_red == __jmax + 1 - __jmin)
         for i in range(j_min_red, born_sup):
             i_red = i % waveform_frames
-            x_red_bar = x[n] % 1.0
-            x_red_bar = x_red_bar + (x_red_bar < X[i_red])
+            
+            # Sol A :
+            # if x_diff > 0:
+            #     x_red_bar = x_red + (i_red >= j_min_red)
+            # else:
+            #     x_red_bar = x_red - (x_red > X[i_red]) * (i_red != j_min_red)
+            # x_red_bar += (i == -1)
+
+            # Sol B :
+            x_red_bar = x_red + cycle_offset + (i_red > j_max_p_red)
 
             I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
                         * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
@@ -1292,14 +1367,17 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
         # Should be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
             # playback going forward
-            j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
+            # j_red = binary_search_down(X, x_red, 0, X.shape[0] - 1)
+            j_red = floor(x_red * waveform_frames)
 
             j = waveform_frames * floor(x[n] / 1.0) + j_red - 1
             j_min = prev_j
             j_max = j
         else:
             # playback going backward
-            j_red = binary_search_up(X, x_red, 0, X.shape[0] - 1)
+            # j_red = binary_search_up(X, x_red, 0, X.shape[0] - 1)
+            j_red = ceil(x_red * waveform_frames)
+
             j = waveform_frames * floor(x[n] / 1.0) + j_red - 1
             j_min = j
             j_max = prev_j
@@ -1332,16 +1410,17 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
         I_sum = 0
 
+        if x_diff < 0 and j_min != -1 and j_min_red > j_max_p_red:
+            cycle_offset = -1.0
+        else:
+            cycle_offset = 0.0
+
         for i in range(j_min, j_max + 1):         #OG Version
-        # for i in range(j_min_red, j_max_p_red):
             i_red = i % waveform_frames
+            ref_bi = x_red + cycle_offset + (i_red > j_max_p_red)
+
             I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i)/waveform_frames))/x_diff)\
                         * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
-
-            # x_red_bar = x[n] % 1.0
-            # x_red_bar = x_red_bar + (x_red_bar < X[i_red])
-            # I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
-            #             * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))    
 
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
@@ -1383,14 +1462,15 @@ if __name__ == "__main__":
     # FREQS = [197, 397, 597, 997, 1599, 2173, 3003, 3997]
     # FREQS = np.int32(np.logspace(start=5, stop=14.4, num=200, base=2))
     # FREQS = np.int32(np.linspace(start=2**5, stop=2**14, num=200))
-    FREQS = [noteToFreq(i) for i in range(21, 109)]
+    # FREQS = [noteToFreq(i) for i in range(21, 109)]
     # FREQS = [noteToFreq(i) for i in range(128)]
     # FREQS = range(4000, 4200)
     # FREQS = np.linspace(60, )
     # FREQS = [685, 686, 687]
 
     # FREQS = [23.1246514194771]
-    # FREQS = [460]
+    # FREQS = [277.182630976872]
+    FREQS = [460]
     # for i in range(4, 16):
     #     FREQS.append(2**i -1)
     #     FREQS.append(2**i)
@@ -1400,12 +1480,12 @@ if __name__ == "__main__":
     # FREQS = [(2**i - 1, 2**i, 2**  +1) for i in range(4, 15)]
     # print(FREQS)
     ALGOS_OPTIONS = [
-        AlgorithmDetails(Algorithm.NAIVE, 1, 0),
+        # AlgorithmDetails(Algorithm.NAIVE, 1, 0),
         # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
+        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False),
         AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=4096),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=1024),
@@ -1416,8 +1496,8 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=32),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=4096),
+        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=False),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 8),
         # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=1024),
@@ -1517,6 +1597,7 @@ if __name__ == "__main__":
 
                 num_frames = int(DURATION_S * SAMPLERATE * options.oversampling)
                 x = np.linspace(0.0, DURATION_S*freq, num_frames, endpoint=True)
+                x = np.flip(x)
                 # x = generate_sweep_phase(200, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
                 routine_args.append([options, x, cache, freq])
     
