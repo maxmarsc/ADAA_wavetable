@@ -4,4 +4,5 @@ def table_size(n, init_size):
         sm += init_size / (2**i)
     return sm
 
+
 # print(table_size(8, 2048))

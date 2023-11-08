@@ -5,17 +5,18 @@ from cmath import exp as cexp
 from typing import Tuple, List, Dict
 from mipmap import *
 
+
 @njit
-def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int:
+def binary_search_down(x: np.ndarray, x0: float, j_min: int, j_max: int) -> int:
     """
     return i as x_i < x_0 < x_(i+1) && j_min <= i <= j_max (or j_max - 1)
     """
     if x0 < x[0]:
-        return -1           # Should it be -1 ? 0 in matlab so it's weird
+        return -1  # Should it be -1 ? 0 in matlab so it's weird
     elif x0 >= x[j_max]:
         return j_max - 1
     else:
-        i_mid = floor((j_min + j_max)/2)
+        i_mid = floor((j_min + j_max) / 2)
 
         if x0 < x[i_mid]:
             j_max = i_mid
@@ -23,14 +24,15 @@ def binary_search_down(x : np.ndarray, x0: float, j_min: int, j_max: int) -> int
             return i_mid
         else:
             j_min = i_mid
-        
+
         if j_max - j_min > 1:
             return binary_search_down(x, x0, j_min, j_max)
         else:
             return j_min
 
+
 @njit
-def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
+def binary_search_up(x: np.ndarray, x0: float, j_min: int, j_max: int):
     """
     return i as x_i > x_0 > x_(i+1) && j_min <= i <= j_max
 
@@ -41,7 +43,7 @@ def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
     elif x0 <= x[0]:
         return 0
     else:
-        i_mid = floor((j_min + j_max)/2)
+        i_mid = floor((j_min + j_max) / 2)
 
         if x0 < x[i_mid]:
             j_max = i_mid
@@ -52,6 +54,7 @@ def binary_search_up(x : np.ndarray, x0: float, j_min: int, j_max: int):
             return binary_search_up(x, x0, j_min, j_max)
         else:
             return j_max
+
 
 @njit
 def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
@@ -68,10 +71,10 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
     y = np.zeros(x.shape[0])
 
     # Period - should be 1
-    assert(X[-1] == 1.0)
+    assert X[-1] == 1.0
     T = 1.0
 
-    waveform_frames = m.shape[0]     # aka k
+    waveform_frames = m.shape[0]  # aka k
 
     expbeta = cexp(beta)
 
@@ -98,14 +101,14 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
         # prev_j_red = j_red % waveform_frames
 
         # TODO: No idea ?
-        if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
+        if (x_diff >= 0 and prev_x_diff >= 0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
             prev_j = j + int(np.sign(x_red - X[j_red]))
             # prev_j_red = j_red + int(np.sign(x_red - X[j_red]))
             # Is used to avoid computing a new j_min using the binary search, because
             # if j_min == j_max then the I sum is zero so its corresponds to the case
             # where x_n and x_n+1 are in the same interval
-        
+
         x_red = x[n] % 1.0
 
         # Should be differentiated upstream to avoid if on each sample
@@ -129,17 +132,29 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
         j_min_red = j_min % waveform_frames
         j_max_p_red = (j_max + 1) % waveform_frames
 
-
         # prev_x_red_bar = prev_x % 1.0
         # prev_x_red_bar += (prev_x_red_bar == 0.0)
 
         # Could be differentiated upstream to avoid if on each sample
         if x_diff >= 0:
             ## OG version
-            I = expbeta\
-                    * (m[j_min_red] * x_diff + beta * (m[j_min_red] * (prev_x - T * floor(j_min/ waveform_frames)) + q[j_min_red]))\
-                    - m[j_max_p_red] * x_diff\
-                    - beta * (m[j_max_p_red] * (x[n] - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red])
+            I = (
+                expbeta
+                * (
+                    m[j_min_red] * x_diff
+                    + beta
+                    * (
+                        m[j_min_red] * (prev_x - T * floor(j_min / waveform_frames))
+                        + q[j_min_red]
+                    )
+                )
+                - m[j_max_p_red] * x_diff
+                - beta
+                * (
+                    m[j_max_p_red] * (x[n] - T * floor((j_max + 1) / waveform_frames))
+                    + q[j_max_p_red]
+                )
+            )
 
             ### j_min/j_max independant version
             # I = expbeta\
@@ -147,10 +162,24 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
             #         - m[j_max_p_red] * x_diff\
             #         - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
         else:
-            I = expbeta\
-                    * (m[j_max_p_red] * x_diff + beta * (m[j_max_p_red] * (prev_x - T * floor((j_max+1)/waveform_frames)) + q[j_max_p_red]))\
-                    - m[j_min_red] * x_diff\
-                    - beta * (m[j_min_red] * (x[n] - T * floor(j_min/waveform_frames)) + q[j_min_red])
+            I = (
+                expbeta
+                * (
+                    m[j_max_p_red] * x_diff
+                    + beta
+                    * (
+                        m[j_max_p_red]
+                        * (prev_x - T * floor((j_max + 1) / waveform_frames))
+                        + q[j_max_p_red]
+                    )
+                )
+                - m[j_min_red] * x_diff
+                - beta
+                * (
+                    m[j_min_red] * (x[n] - T * floor(j_min / waveform_frames))
+                    + q[j_min_red]
+                )
+            )
 
         I_sum = 0
 
@@ -159,12 +188,13 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
         else:
             cycle_offset = 0.0
 
-        for i in range(j_min, j_max + 1):         #OG Version
+        for i in range(j_min, j_max + 1):  # OG Version
             i_red = i % waveform_frames
             ref_bi = x_red + cycle_offset + (i_red > j_max_p_red)
 
-            I_sum += cexp(beta * (x[n] - X[i_red + 1] - T * floor((i)/waveform_frames))/x_diff)\
-                        * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
+            I_sum += cexp(
+                beta * (x[n] - X[i_red + 1] - T * floor((i) / waveform_frames)) / x_diff
+            ) * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
 
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
@@ -177,7 +207,6 @@ def process_bi(x, B, beta: complex, X, m, q, m_diff, q_diff):
         prev_x_diff = x_diff
 
     return y
-
 
 
 @njit
@@ -197,9 +226,9 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
     y = np.zeros(x.shape[0])
 
     # Period - should be 1
-    assert(X[-1] == 1.0)
+    assert X[-1] == 1.0
 
-    waveform_frames = m.shape[0]     # aka k
+    waveform_frames = m.shape[0]  # aka k
 
     expbeta = cexp(beta)
 
@@ -216,18 +245,18 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
-        assert(x_diff >= 0)
+        assert x_diff >= 0
         # prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
         prev_j_red = j_red % waveform_frames
 
         # TODO: No idea ?
-        if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
+        if (x_diff >= 0 and prev_x_diff >= 0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
             prev_j_red = j_red + int(np.sign(x_red - X[j_red]))
             # Is used to avoid computing a new j_min using the binary search, because
             # if j_min == j_max then the I sum is zero so its corresponds to the case
             # where x_n and x_n+1 are in the same interval
-        
+
         x_red = x[n] % 1.0
 
         # playback going forward
@@ -236,14 +265,18 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
         j_max_p_red = j_red
         j_min_red = (prev_j_red - 1) % waveform_frames
 
-
         prev_x_red_bar = prev_x % 1.0
-        prev_x_red_bar += (prev_x_red_bar == 0.0)
+        prev_x_red_bar += prev_x_red_bar == 0.0
 
-        I = expbeta\
-                * (m[j_min_red] * x_diff + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red]))\
-                - m[j_max_p_red] * x_diff\
-                - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
+        I = (
+            expbeta
+            * (
+                m[j_min_red] * x_diff
+                + beta * (m[j_min_red] * prev_x_red_bar + q[j_min_red])
+            )
+            - m[j_max_p_red] * x_diff
+            - beta * (m[j_max_p_red] * x_red + q[j_max_p_red])
+        )
 
         I_sum = 0
         born_sup = j_max_p_red + waveform_frames * (j_min_red > j_max_p_red)
@@ -252,8 +285,9 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
             x_red_bar = x[n] % 1.0
             x_red_bar = x_red_bar + (x_red_bar < X[i_red])
 
-            I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
-                        * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
+            I_sum += cexp(beta * (x_red_bar - X[i_red + 1]) / x_diff) * (
+                beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1])
+            )
 
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
@@ -269,10 +303,17 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
 
 
 @njit
-def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[float]], 
-                       m_mipmap: List[np.ndarray[float]], q_mipmap: List[np.ndarray[float]], 
-                       m_diff_mipmap: List[np.ndarray[float]], q_diff_mipmap: List[np.ndarray[float]], 
-                       mipmap_scale: np.ndarray[float]):
+def process_fwd_mipmap_xfading(
+    x,
+    B,
+    beta: complex,
+    X_mipmap: List[np.ndarray[float]],
+    m_mipmap: List[np.ndarray[float]],
+    q_mipmap: List[np.ndarray[float]],
+    m_diff_mipmap: List[np.ndarray[float]],
+    q_diff_mipmap: List[np.ndarray[float]],
+    mipmap_scale: np.ndarray[float],
+):
     """
     This is a simplified version of the process method translated from matlab, more suited to real time use :
 
@@ -289,7 +330,7 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
 
     # Period - should be 1
     for phases in X_mipmap:
-        assert(phases[-1] == 1.0)
+        assert phases[-1] == 1.0
 
     expbeta = cexp(beta)
 
@@ -311,12 +352,16 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
         x_diff = x[n] - prev_x
         if x_diff <= 0:
             x_diff += 1.0
-        assert(x_diff >= 0)
+        assert x_diff >= 0
 
-        mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
-        waveform_frames = m_mipmap[mipmap_idx].shape[0]     # aka k
-        prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
-        
+        mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(
+            x_diff, mipmap_scale
+        )
+        waveform_frames = m_mipmap[mipmap_idx].shape[0]  # aka k
+        prev_x_red_bar = x_red + (
+            x_red == 0.0
+        )  # To replace (prev_x - T * floor(j_min/ waveform_frames))
+
         if mipmap_idx != prev_mipmap_idx:
             if mipmap_idx == prev_mipmap_idx + 1:
                 # Going up in frequencies
@@ -326,7 +371,6 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
                 j_red = j_red * 2 + (X_mipmap[mipmap_idx][j_red * 2 + 1] < x_red)
         prev_j_red = j_red + int(np.sign(x_red - X_mipmap[mipmap_idx][j_red]))
 
-        
         x_red = x[n] % 1.0
 
         # playback going forward
@@ -335,18 +379,23 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
         j_max_p_red = j_red
         j_min_red = (prev_j_red - 1) % waveform_frames
 
-
         prev_x_red_bar = prev_x % 1.0
-        prev_x_red_bar += (prev_x_red_bar == 0.0)
+        prev_x_red_bar += prev_x_red_bar == 0.0
 
-        I_crt = compute_I_fwd(m_mipmap[mipmap_idx],
-                          q_mipmap[mipmap_idx],
-                          m_diff_mipmap[mipmap_idx],
-                          q_diff_mipmap[mipmap_idx],
-                          X_mipmap[mipmap_idx],
-                          j_min_red, j_max_p_red,
-                          beta, expbeta, x_diff, prev_x_red_bar, x_red)
-        
+        I_crt = compute_I_fwd(
+            m_mipmap[mipmap_idx],
+            q_mipmap[mipmap_idx],
+            m_diff_mipmap[mipmap_idx],
+            q_diff_mipmap[mipmap_idx],
+            X_mipmap[mipmap_idx],
+            j_min_red,
+            j_max_p_red,
+            beta,
+            expbeta,
+            x_diff,
+            prev_x_red_bar,
+            x_red,
+        )
 
         if weight_up != 0.0:
             jmin_up = j_min_red // 2
@@ -362,19 +411,25 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
             # assert(jmax_up == ref_max)
             # # ---
 
-            I_up = compute_I_fwd(m_mipmap[mipmap_idx_up],
-                               q_mipmap[mipmap_idx_up],
-                                m_diff_mipmap[mipmap_idx_up],
-                                q_diff_mipmap[mipmap_idx_up],
-                                X_mipmap[mipmap_idx_up],
-                                jmin_up, jmax_up,
-                                beta, expbeta, x_diff, prev_x_red_bar, x_red)
+            I_up = compute_I_fwd(
+                m_mipmap[mipmap_idx_up],
+                q_mipmap[mipmap_idx_up],
+                m_diff_mipmap[mipmap_idx_up],
+                q_diff_mipmap[mipmap_idx_up],
+                X_mipmap[mipmap_idx_up],
+                jmin_up,
+                jmax_up,
+                beta,
+                expbeta,
+                x_diff,
+                prev_x_red_bar,
+                x_red,
+            )
             I_crt = I_crt * weight + weight_up * I_up
-            
-        y_cpx: complex = expbeta * prev_cpx_y + 2 * B * (I_crt / (beta ** 2))
+
+        y_cpx: complex = expbeta * prev_cpx_y + 2 * B * (I_crt / (beta**2))
         # y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I_crt
         y[n] = y_cpx.real
-
 
         prev_x = x[n]
 
@@ -384,13 +439,17 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
 
     return y
 
+
 @njit
-def compute_I_fwd(m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, prev_x_red_bar, x_red) -> complex:
+def compute_I_fwd(
+    m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, prev_x_red_bar, x_red
+) -> complex:
     frames = m.shape[0]
-    I = expbeta\
-        * (m[jmin] * x_diff + beta * (m[jmin] * prev_x_red_bar + q[jmin]))\
-        - m[jmax] * x_diff\
+    I = (
+        expbeta * (m[jmin] * x_diff + beta * (m[jmin] * prev_x_red_bar + q[jmin]))
+        - m[jmax] * x_diff
         - beta * (m[jmax] * x_red + q[jmax])
+    )
 
     I_sum = 0
     born_sup = jmax + frames * (jmin > jmax)
@@ -398,18 +457,26 @@ def compute_I_fwd(m, q, m_diff, q_diff, X, jmin, jmax, beta, expbeta, x_diff, pr
         i_red = i % frames
         x_red_bar = x_red + (x_red < X[i_red])
 
-        I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
-                    * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
-        
+        I_sum += cexp(beta * (x_red_bar - X[i_red + 1]) / x_diff) * (
+            beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1])
+        )
+
     # return (I + np.sign(x_diff) * I_sum) / (beta**2)
     return I + I_sum
 
 
 @njit
-def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]], 
-                       m_mipmap: List[np.ndarray[float]], q_mipmap: List[np.ndarray[float]], 
-                       m_diff_mipmap: List[np.ndarray[float]], q_diff_mipmap: List[np.ndarray[float]], 
-                       mipmap_scale: np.ndarray[float]):
+def process_fwd_mipmap(
+    x,
+    B,
+    beta: complex,
+    X_mipmap: List[np.ndarray[float]],
+    m_mipmap: List[np.ndarray[float]],
+    q_mipmap: List[np.ndarray[float]],
+    m_diff_mipmap: List[np.ndarray[float]],
+    q_diff_mipmap: List[np.ndarray[float]],
+    mipmap_scale: np.ndarray[float],
+):
     """
     This is a simplified version of the process method translated from matlab, more suited to real time use :
 
@@ -427,8 +494,7 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
     # Period - should be 1
     # assert(all(phases[-1] == 1.0 for phases in X))
     for phases in X_mipmap:
-        assert(phases[-1] == 1.0)
-
+        assert phases[-1] == 1.0
 
     # waveform_frames = m.shape[0]     # aka k
 
@@ -451,11 +517,13 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
         x_diff = x[n] - prev_x
         if x_diff <= 0:
             x_diff += 1.0
-        assert(x_diff >= 0)
+        assert x_diff >= 0
         mipmap_idx = find_mipmap_index(x_diff, mipmap_scale)
-        waveform_frames = m_mipmap[mipmap_idx].shape[0]     # aka k
-        prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
-        
+        waveform_frames = m_mipmap[mipmap_idx].shape[0]  # aka k
+        prev_x_red_bar = x_red + (
+            x_red == 0.0
+        )  # To replace (prev_x - T * floor(j_min/ waveform_frames))
+
         if mipmap_idx == prev_mipmap_idx:
             prev_j_red = j_red + int(np.sign(x_red - X_mipmap[mipmap_idx][j_red]))
         else:
@@ -463,7 +531,6 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
             j_red = floor(x_red * X_mipmap[mipmap_idx].shape[0] - 1)
             prev_j_red = j_red + int(np.sign(x_red - X_mipmap[mipmap_idx][j_red]))
 
-        
         x_red = x[n] % 1.0
 
         # playback going forward
@@ -472,14 +539,26 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
         j_max_p_red = j_red
         j_min_red = (prev_j_red - 1) % waveform_frames
 
-
         prev_x_red_bar = prev_x % 1.0
-        prev_x_red_bar += (prev_x_red_bar == 0.0)
+        prev_x_red_bar += prev_x_red_bar == 0.0
 
-        I = expbeta\
-                * (m_mipmap[mipmap_idx][j_min_red] * x_diff + beta * (m_mipmap[mipmap_idx][j_min_red] * prev_x_red_bar + q_mipmap[mipmap_idx][j_min_red]))\
-                - m_mipmap[mipmap_idx][j_max_p_red] * x_diff\
-                - beta * (m_mipmap[mipmap_idx][j_max_p_red] * x_red + q_mipmap[mipmap_idx][j_max_p_red])
+        I = (
+            expbeta
+            * (
+                m_mipmap[mipmap_idx][j_min_red] * x_diff
+                + beta
+                * (
+                    m_mipmap[mipmap_idx][j_min_red] * prev_x_red_bar
+                    + q_mipmap[mipmap_idx][j_min_red]
+                )
+            )
+            - m_mipmap[mipmap_idx][j_max_p_red] * x_diff
+            - beta
+            * (
+                m_mipmap[mipmap_idx][j_max_p_red] * x_red
+                + q_mipmap[mipmap_idx][j_max_p_red]
+            )
+        )
 
         I_sum = 0
         born_sup = j_max_p_red + waveform_frames * (j_min_red > j_max_p_red)
@@ -488,8 +567,13 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
             x_red_bar = x[n] % 1.0
             x_red_bar = x_red_bar + (x_red_bar < X_mipmap[mipmap_idx][i_red])
 
-            I_sum += cexp(beta * (x_red_bar - X_mipmap[mipmap_idx][i_red + 1])/x_diff)\
-                        * (beta * q_diff_mipmap[mipmap_idx][i_red] + m_diff_mipmap[mipmap_idx][i_red] * (x_diff + beta * X_mipmap[mipmap_idx][i_red + 1]))
+            I_sum += cexp(
+                beta * (x_red_bar - X_mipmap[mipmap_idx][i_red + 1]) / x_diff
+            ) * (
+                beta * q_diff_mipmap[mipmap_idx][i_red]
+                + m_diff_mipmap[mipmap_idx][i_red]
+                * (x_diff + beta * X_mipmap[mipmap_idx][i_red + 1])
+            )
 
         I = (I + np.sign(x_diff) * I_sum) / (beta**2)
 
@@ -497,7 +581,6 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
         y[n] = y_cpx.real
         # assert(abs(y[n]) < 3.0)
-
 
         prev_x = x[n]
 
@@ -522,14 +605,14 @@ def process_naive_hermite(waveform, x_values):
     y = np.zeros(x_values.shape[0])
     waveform_len = waveform.shape[0]
 
-    for (i, x) in enumerate(x_values):
+    for i, x in enumerate(x_values):
         x_red = x % 1.0
 
         relative_idx = x_red * waveform_len
         idx_0 = (floor(relative_idx) - 1) % waveform_len
         idx_1 = floor(relative_idx)
-        idx_2 = (floor(relative_idx) + 1 ) % waveform_len
-        idx_3 = (floor(relative_idx) + 2 ) % waveform_len
+        idx_2 = (floor(relative_idx) + 1) % waveform_len
+        idx_3 = (floor(relative_idx) + 2) % waveform_len
 
         sample_offset = relative_idx - idx_1
 

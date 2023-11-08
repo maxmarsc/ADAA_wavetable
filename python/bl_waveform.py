@@ -3,9 +3,10 @@ from numpy import asarray, zeros, pi, sin, cos, amax, diff, arange, outer
 import numpy as np
 from numba import njit
 
+
 # see https://gist.github.com/endolith/407991
 @njit
-def bl_sawtooth(x, play_freq): # , width=1
+def bl_sawtooth(x, play_freq):  # , width=1
     """
     Return a periodic band-limited sawtooth wave with
     period 2*pi which is falling from 0 to 2*pi and rising at
@@ -19,7 +20,7 @@ def bl_sawtooth(x, play_freq): # , width=1
     """
     t = asarray(2 * pi * play_freq * x)
 
-    if abs((t[-1]-t[-2]) - (t[1]-t[0])) > .0000001:
+    if abs((t[-1] - t[-2]) - (t[1] - t[0])) > 0.0000001:
         raise ValueError("Sampling frequency must be constant")
 
     # if t.dtype.char in ['fFdD']:
@@ -29,7 +30,7 @@ def bl_sawtooth(x, play_freq): # , width=1
     y = zeros(t.shape, dtype=np.float32)
 
     # Get sampling frequency from timebase
-    fs =  1 / (t[1] - t[0])
+    fs = 1 / (t[1] - t[0])
     #    fs =  1 / amax(diff(t))
 
     # Sum all multiple sine waves up to the Nyquist frequency
@@ -37,7 +38,7 @@ def bl_sawtooth(x, play_freq): # , width=1
     # TODO: Maybe choose between these based on number of harmonics?
 
     # Slower, uses less memory
-    for h in range(1, int(fs*pi)+1):
+    for h in range(1, int(fs * pi) + 1):
         y += 2 / pi * -sin(h * t) / h
 
     return y
