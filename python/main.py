@@ -6,7 +6,6 @@ from cmath import exp as cexp
 from scipy.signal import welch, butter, cheby2, residue, freqs, zpk2tf, windows, spectrogram, decimate
 import matplotlib.pyplot as plt
 import matplotlib
-import soxr
 import soundfile as sf
 import csv
 from pathlib import Path
@@ -16,10 +15,7 @@ from multiprocessing import Pool
 import logging
 from numba import njit
 import os
-
 from typing import Tuple, List, Dict
-from numba.typed import List as NumbaList
-
 
 from bl_waveform import bl_sawtooth
 from decimator import Decimator17, Decimator9
@@ -58,34 +54,10 @@ class AdaaCache:
 class NaiveCache:
     waveform: np.ndarray[float]
 
-# @njit
-# def compute_naive_saw(frames: int) -> np.ndarray:
-#     phase = 0.0
-#     waveform = np.zeros(frames)
-#     step = 1.0/frames
-
-#     for i in range(frames):
-#         waveform[i] = 2.0 * phase - 1
-#         phase = (phase + step) % 1.0
-
-#     return waveform
-
-
-# def compute_naive_sin(frames: int) -> np.ndarray:
-#     phase = np.linspace(0, 2 * np.pi, frames, endpoint=False)
-#     return np.sin(phase)
-
 @njit
 def noteToFreq(note: int) -> float:
     a = 440 #frequency of A (coomon value is 440Hz)
     return (a / 32) * (2 ** ((note - 9) / 12))
-
-# @njit
-# def fast_floor(fval: float):
-#     ival = int(fval)
-#     if float(ival) > fval:
-#         return ival - 1
-#     return ival
 
 
 def butter_coeffs(order, ctf, samplerate) -> Tuple[np.ndarray[complex], np.ndarray[complex]]:
