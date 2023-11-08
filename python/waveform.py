@@ -2,11 +2,7 @@ import numpy as np
 import soundfile as sf
 import soxr
 from pathlib import Path
-
-from math import log2
 from enum import Enum
-import samplerate
-
 from numba import njit
 
 class Waveform:
@@ -101,9 +97,10 @@ class NaiveWaveform(Waveform):
 
     
 if __name__ == "__main__":
-    wave = NaiveWaveform(NaiveWaveform.Type.SAW, 2048, 44100)
+    # wave = NaiveWaveform(NaiveWaveform.Type.SAW, 2048, 44100)
+    wave = FileWaveform("wavetables/massacre.wav")
 
-    sizes = (2048, 64, 32, 16, 8, 4)
+    sizes = (2048, 1024, 512, 256, 128, 64)
 
     waves = [wave.get(size) for size in sizes]
 

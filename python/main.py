@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 from math import exp, floor, ceil
 from cmath import exp as cexp
-from scipy.signal import welch, butter, cheby2, residue, freqs, zpk2tf, windows, spectrogram
+from scipy.signal import welch, butter, cheby2, residue, freqs, zpk2tf, windows, spectrogram, decimate
 import matplotlib.pyplot as plt
 import matplotlib
 import soxr
@@ -14,7 +14,8 @@ import argparse
 from dataclasses import dataclass
 from multiprocessing import Pool
 import logging
-from numba import jit, njit
+from numba import njit
+import os
 
 from typing import Tuple, List, Dict
 from numba.typed import List as NumbaList
@@ -25,20 +26,18 @@ from decimator import Decimator17, Decimator9
 from waveform import FileWaveform, NaiveWaveform
 from mipmap import *
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
-WAVEFORM_LEN = 4096
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
+# Watch out for ram usage
 DURATION_S = 5.0
-NUM_PROCESS = 19
-# CSV_OUTPUT = "benchmark.csv"
+# Watch out for ram usage
+NUM_PROCESS = min(os.cpu_count(), 20)
 
 matplotlib.use('TkAgg')
-# logging.info("Starting matlab")
-# MATLAB = matlab.engine.start_matlab()
-# logging.info("matlab started")
+
 
 @dataclass
 class MipMapAdaaCache:
@@ -87,9 +86,6 @@ def fast_floor(fval: float):
     if float(ival) > fval:
         return ival - 1
     return ival
-
-NAIVE_SAW = compute_naive_saw(WAVEFORM_LEN)
-NAIVE_SAW_X = np.linspace(0, 1, WAVEFORM_LEN + 1, endpoint=True)
 
 
 def butter_coeffs(order, ctf, samplerate) -> Tuple[np.ndarray[complex], np.ndarray[complex]]:
@@ -237,8 +233,17 @@ def process_naive_linear(waveform, x_values):
             y[i] = waveform[prev_idx]
         else:
             a = (waveform[next_idx] - waveform[prev_idx]) / (next_idx - prev_idx)
+            # a = (waveform[next_idx] - waveform[prev_idx])
             b = waveform[prev_idx] - prev_idx * a
             y[i] = a * relative_idx + b  
+            # if next_idx - prev_idx != 1:
+            #     other_a =  (waveform[next_idx] - waveform[prev_idx])
+            #     other_b = waveform[prev_idx] - prev_idx * other_a
+            #     other_y = other_a * relative_idx + other_b
+            #     print("prev_idx ", prev_idx)
+            #     print("next_idx ", next_idx)
+            #     print("y ", y[i])
+            #     print("other y ", other_y)
     
     return y
 
@@ -426,33 +431,25 @@ def fast_compute_sinad(noised_fft: np.ndarray, clean_fft: np.ndarray, fundamenta
     fft_size = noised_fft.shape[0]
     bin_size = SAMPLERATE / 2 / (fft_size - 1)
 
-    # Expected bin for the fundamental frequency
-    expected_fundamental_bin = int(np.round(fundamental / bin_size))
-
-    # # Search around the expected bin for the true peak
-    # search_range = 5  # 5 bins on either side
-    # beg_range = max(0, expected_fundamental_bin - search_range)
-    # end_range = min(noised_fft.shape[0], expected_fundamental_bin + search_range + 1)
-    # fundamental_bin = expected_fundamental_bin + np.argmax(np.abs(clean_fft[beg_range:end_range])) - search_range
-
-    # # Check fundamental frequency
-    # val = np.argmax(np.abs(clean_fft))
-    # assert(val == fundamental_bin)
-
-    # Not that slow and less buggy 
+    # find fundamental frequency
     fundamental_bin = np.argmax(np.abs(clean_fft))
 
+    # normalize so the two signals have the same fundamental power
+    norm_ratio = np.abs(clean_fft[fundamental_bin]) / np.abs(noised_fft[fundamental_bin])
+    clean_fft /= norm_ratio
+
     # Compute Harmonic Distortion
-    harmonics = [i * fundamental_bin for i in range(1, fft_size // fundamental_bin)]
+    harmonics = [i * fundamental_bin for i in range(2, fft_size // fundamental_bin)]
     hd_power = np.sum(np.array([(np.abs(noised_fft[h]) - np.abs(clean_fft[h]))**2 for h in harmonics]))
     
     # Compute Noise
-    noise_bins = [i for i in range(len(noised_fft)//2) if i not in harmonics and i != fundamental_bin]
+    noise_bins = [i for i in range(1, len(noised_fft)//2) if i not in harmonics and i != fundamental_bin]
     noise_power = np.sum(np.array([(np.abs(noised_fft[n]) - np.abs(clean_fft[n]))**2 for n in noise_bins]))
 
+
     # Compute SINAD
-    signal_power = np.abs(clean_fft[fundamental_bin])**2
-    sinad_value = signal_power / (hd_power + noise_power)
+    signal_power = np.abs(clean_fft[fundamental_bin])
+    sinad_value = (signal_power + hd_power + noise_power) / (hd_power + noise_power)
     sinad_db = 10 * np.log10(sinad_value)
 
     return sinad_db
@@ -479,6 +476,8 @@ def process_adaa(x: np.ndarray, cache: AdaaCache, ftype: Algorithm,
         (r, p, _) = cheby_coeffs(forder, CHEBY_CTF, 60, sr)
         fname = "CH"
 
+    # filter_msg = "{} {}\nr : {}\np : {}".format(fname, forder, r, p)
+    # logging.info(filter_msg)
     y = np.zeros(x.shape[0])
 
     for order in range(0, forder, 2):
@@ -492,7 +491,7 @@ def process_adaa(x: np.ndarray, cache: AdaaCache, ftype: Algorithm,
     if os_factor == 2:
         ds_size = int(y.shape[0] / os_factor)
         y_ds = np.zeros((ds_size,))
-        decimator = Decimator9()
+        decimator = Decimator17()
         for i in range(ds_size):
             y_ds[i] = decimator.process(y[i*2], y[i*2 + 1])
         y = y_ds
@@ -535,11 +534,15 @@ def process_adaa_mipmap(x: List[np.ndarray], cache: MipMapAdaaCache,
         (r, p, _) = cheby_coeffs(forder, CHEBY_CTF, 60, sr)
         fname = "CH"
 
+    # filter_msg = "{} {}\nr : {}\np : {}".format(fname, forder, r, p)
+    # logging.info(filter_msg)
+
     y = np.zeros(x.shape[0])
 
     for order in range(0, forder, 2):
         ri = r[order]
         zi = p[order]
+        # y += process_fwd_mipmap(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
         # y += process_fwd_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
         y += process_bi_mipmap_xfading(x, ri, zi, X, cache.m_mipmap, cache.q_mipmap, cache.m_diff_mipmap, cache.q_diff_mipmap, cache.mipmap_scale)
 
@@ -583,13 +586,14 @@ def process_naive(x: np.ndarray, waveform: np.ndarray, os_factor: int) -> Tuple[
     assert(np.isnan(y).any() == False)
 
     if os_factor != 1:
-        # Downsampling
-        y = soxr.resample(
-            y,
-            SAMPLERATE * os_factor,
-            SAMPLERATE,
-            quality="HQ"
-        )
+        # # Downsampling
+        # y = soxr.resample(
+        #     y,
+        #     SAMPLERATE * os_factor,
+        #     SAMPLERATE,
+        #     quality="HQ"
+        # )
+        y = decimate(y, os_factor)
 
     name = "naive"
     if os_factor != 1:
@@ -597,15 +601,17 @@ def process_naive(x: np.ndarray, waveform: np.ndarray, os_factor: int) -> Tuple[
     
     return (y, name)
 
-@njit
-def generate_sweep_phase(f1, f2, t, fs):
+def generate_sweep_phase(f1, f2, t, fs, log_scale=False):
     # Calculate the number of samples
     n = int(t * fs)
 
-    freqs = np.linspace(f1, f2, n-1)
-    # start = np.log2(f1)
-    # stop = np.log2(f2)
-    # freqs = np.logspace(start, stop, num=n-1, base=2)
+    if log_scale:
+        start = np.log2(f1)
+        stop = np.log2(f2)
+        freqs = np.logspace(start, stop, num=n-1, base=2)
+    else:
+        freqs = np.linspace(f1, f2, n-1)
+
     phases = np.zeros(n)
 
     phase = 0
@@ -739,6 +745,8 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
+        if x_diff <= 0:
+            x_diff += 1.0
         assert(x_diff >= 0)
         mipmap_idx = find_mipmap_index(x_diff, mipmap_scale)
         waveform_frames = m_mipmap[mipmap_idx].shape[0]     # aka k
@@ -782,7 +790,7 @@ def process_fwd_mipmap(x, B, beta: complex, X_mipmap: List[np.ndarray[float]],
         # See formula (10)
         y_cpx: complex = expbeta * prev_cpx_y + 2 * B * I
         y[n] = y_cpx.real
-        assert(abs(y[n]) < 3.0)
+        # assert(abs(y[n]) < 3.0)
 
 
         prev_x = x[n]
@@ -824,15 +832,17 @@ def process_bi_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[flo
     prev_cpx_y: complex = 0
     prev_x_diff = 0
 
-
     # Setting j indexs and some reduced values
     x_red = prev_x % 1.0
     x_diff = x[1] - x[0]
-    mipmap_xfade_idxs = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
+    mipmap_xfade_idxs = find_mipmap_xfading_indexes(abs(x_diff), mipmap_scale)
     prev_mipmap_idx = mipmap_xfade_idxs[0]
     # j_red = binary_search_down(X_mipmap[prev_mipmap_idx], x_red, 0, X_mipmap[prev_mipmap_idx].shape[0] - 1)
     waveform_frames = m_mipmap[prev_mipmap_idx].shape[0]
-    j_red = floor(x_red * waveform_frames)    
+    if x_diff > 0:
+        j_red = floor(x_red * waveform_frames)
+    else:
+        j_red = ceil(x_red * waveform_frames)
 
     for n in range(1, x.shape[0]):
         # loop init
@@ -842,17 +852,38 @@ def process_bi_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[flo
         elif x_diff > 0.5:
             x_diff -= 1.0
 
-        mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
+        mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(abs(x_diff), mipmap_scale)
         waveform_frames = m_mipmap[mipmap_idx].shape[0]     # aka k
 
+        # Cautious, in this block, x_red still holds the value of the previous iteration
         if mipmap_idx != prev_mipmap_idx:
-            if mipmap_idx == prev_mipmap_idx + 1:
+            # if prev_x_diff >= 0:
+            #     ref = floor(x_red * waveform_frames)
+            #     j_red = ref
+            # else:
+            #     ref = ceil(x_red * waveform_frames)
+            #     j_red = ref
+
+            if mipmap_idx > prev_mipmap_idx:
                 # Going up in frequencies
-                j_red = j_red // 2
+                # print("Going up from ", j_red)
+                j_red = j_red >> (mipmap_idx - prev_mipmap_idx)
             else:
                 # Going down in frequencies
-                j_red = j_red * 2 + (X_mipmap[mipmap_idx][j_red * 2 + 1] < x_red)
+                j_red = j_red << (prev_mipmap_idx - mipmap_idx)
+                if prev_x_diff >= 0:
+                    j_red += (X_mipmap[mipmap_idx][j_red + 1] < x_red)
+                else:
+                    j_red -= (X_mipmap[mipmap_idx][j_red - 1] > x_red)
+                # if prev_x_diff >= 0:
+                #     j_red = floor(x_red * waveform_frames)
+                # else:
+                #     j_red = ceil(x_red * waveform_frames)
+                    # print("Going down from ", j_red)
+
+                # j_red = j_red << (prev_mipmap_idx - mipmap_idx)
         
+        prev_j_red = j_red
         if (x_diff >= 0 and prev_x_diff >=0) or (x_diff < 0 and prev_x_diff <= 0):
             # If on the same slop as the previous iteration
             prev_j_red = j_red + int(np.sign(x_red - X_mipmap[mipmap_idx][j_red]))
@@ -896,8 +927,10 @@ def process_bi_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[flo
                                 jmin, jmin_red_up, jmax_p_red_up,
                                 beta, expbeta, x_diff, prev_x_red, x_red)
             I_crt = I_crt * weight + weight_up * I_up
-            
-        y_cpx: complex = expbeta * prev_cpx_y + 2 * B * (I_crt / (beta ** 2))
+
+        
+        beta_pow2 = beta ** 2
+        y_cpx: complex = expbeta * prev_cpx_y + 2 * B * (I_crt / beta_pow2)
         y[n] = y_cpx.real
 
         prev_x = x[n]
@@ -949,6 +982,8 @@ def process_fwd_mipmap_xfading(x, B, beta: complex, X_mipmap: List[np.ndarray[fl
     for n in range(1, x.shape[0]):
         # loop init
         x_diff = x[n] - prev_x
+        if x_diff <= 0:
+            x_diff += 1.0
         assert(x_diff >= 0)
 
         mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(x_diff, mipmap_scale)
@@ -1076,8 +1111,7 @@ def compute_I_bi(m, q, m_diff, q_diff, X, jmin, jmin_red, jmax_p_red, beta, expb
         I_sum += cexp(beta * (x_red_bar - X[i_red + 1])/x_diff)\
                     * (beta * q_diff[i_red] + m_diff[i_red] * (x_diff + beta * X[i_red + 1]))
         
-    # return (I + np.sign(x_diff) * I_sum) / (beta**2)
-    return I + I_sum
+    return (I + np.sign(x_diff) * I_sum)
 
 
 @njit
@@ -1116,7 +1150,7 @@ def process_fwd(x, B, beta: complex, X, m, q, m_diff, q_diff):
         # loop init
         x_diff = x[n] - prev_x
         assert(x_diff >= 0)
-        prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
+        # prev_x_red_bar = x_red + (x_red == 0.0)     # To replace (prev_x - T * floor(j_min/ waveform_frames))
         prev_j_red = j_red % waveform_frames
 
         # TODO: No idea ?
@@ -1448,8 +1482,10 @@ if __name__ == "__main__":
     parser.add_argument("--export", choices=["snr", "sinad", "both", "none"], default="both",
                         help="Choose what to export: snr, sinad, or both (default)")
     parser.add_argument("--export-dir", type=Path, default=Path.cwd())
-    parser.add_argument("--export-audio", action="store_true")
-    parser.add_argument("--no-log", action="store_true", help="Disable console logging")
+    parser.add_argument("--export-audio", action="store_true", help="Export the generated audio")
+    parser.add_argument("--export-phase", action="store_true", help="Export the generated phase vectors")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enabled logging")
+    parser.add_argument("-F", "--flip", action="store_true", help="Flip the generated phase vector to test backward playback")
 
 
     args = parser.parse_args()
@@ -1457,11 +1493,14 @@ if __name__ == "__main__":
     if args.mode != "metrics":
         args.export = "none"
 
+    if args.verbose:
+        logging.getLogger().setLevel(logging.INFO)
+
     import matlab.engine
     # future_engine = matlab.engine.start_matlab(background=True)
     
     # FREQS = [197, 397, 597, 997, 1599, 2173, 3003, 3997]
-    # FREQS = np.int32(np.logspace(start=5, stop=14.4, num=200, base=2))
+    # FREQS = np.logspace(start=5, stop=14.4, num=200, base=2)
     # FREQS = np.int32(np.linspace(start=2**5, stop=2**14, num=200))
     # FREQS = [noteToFreq(i) for i in range(21, 109)]
     # FREQS = [noteToFreq(i) for i in range(128)]
@@ -1471,63 +1510,41 @@ if __name__ == "__main__":
 
     # FREQS = [23.1246514194771]
     # FREQS = [277.182630976872]
-    FREQS = [460]
+    # FREQS = [43.6535289291255]
+    FREQS = [2007]
     # for i in range(4, 16):
     #     FREQS.append(2**i -1)
     #     FREQS.append(2**i)
     #     FREQS.append(2**i + 1)
 
 
-    # FREQS = [(2**i - 1, 2**i, 2**  +1) for i in range(4, 15)]
-    # print(FREQS)
     ALGOS_OPTIONS = [
-        # AlgorithmDetails(Algorithm.NAIVE, 1, 0),
-        # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
+        AlgorithmDetails(Algorithm.NAIVE, 1, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
-        AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False),
         AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=4096),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=1024),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=512),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=256),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=128),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=64),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=32),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 4),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=4096),
-        AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=False),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10, mipmap=True),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 8),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=1024),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=512),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=256),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=128),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=64),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=32),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=16),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 10, mipmap=False, waveform_len=8),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 2),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 2, 4),
-        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 2, 10),
     ]
     sorted_bl = dict()
 
     # Prepare parallel run
-
-    logging.info("Setting up phase vectors")
+    logging.info("Generating caches for computation")
     routine_args = []
     mipmap_caches = dict()
     adaa_caches: Dict[int, AdaaCache] = dict()
     naive_caches : Dict[int, NaiveCache] = dict()
-    # names = []
 
-    # waveform = NAIVE_SAW
     # waveform = FileWaveform("wavetables/massacre.wav")
     waveform = NaiveWaveform(NaiveWaveform.Type.SAW, 2048, 44100)
 
+    if args.export != "none" or args.export_audio or args.export_phase:
+        args.export_dir.mkdir(parents=True, exist_ok=True)
 
     # Init caches
     if any(opt.mipmap and opt.algorithm != Algorithm.NAIVE for opt in ALGOS_OPTIONS):
@@ -1557,6 +1574,22 @@ if __name__ == "__main__":
     if args.mode == "sweep":
         for options in ALGOS_OPTIONS:
             x = generate_sweep_phase(20, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
+            postfix = ""
+            if args.flip:
+                x = np.flip(x)
+                postfix = "_flipped"
+            # x = generate_sweep_phase(20, 300, DURATION_S, SAMPLERATE * options.oversampling)
+            # x = generate_sweep_phase(SAMPLERATE/2, 20, DURATION_S, SAMPLERATE * options.oversampling)
+            # num_frames = int(DURATION_S * SAMPLERATE * options.oversampling)
+            # x = np.linspace(0.0, DURATION_S*1007, num_frames, endpoint=True)
+            # x = np.flip(x)
+            # x = np.random.rand(int(DURATION_S * SAMPLERATE))
+
+            if args.export_phase:
+                filename = options.name + postfix + "_phase.wav"
+                x_red = x % 1.0
+                sf.write(args.export_dir / filename, x_red, samplerate=SAMPLERATE, subtype="FLOAT")
+                
             # x = generate_sweep_phase(SAMPLERATE / 2, 200, DURATION_S, SAMPLERATE * options.oversampling)
             # x = np.linspace(0.0, DURATION_S*5510, int(DURATION_S * SAMPLERATE * options.oversampling), endpoint=True)
             if options.mipmap and options.algorithm != Algorithm.NAIVE:
@@ -1575,18 +1608,6 @@ if __name__ == "__main__":
             bl_results = pool.starmap(bl_sawtooth, bl_gen_args)
 
         for i, freq in enumerate(FREQS):
-            # dist = SAMPLERATE % freq
-            # if dist < 3.0 or abs(freq - dist) < 3.0:
-            #     print("Skipping {} Hz" .format(freq))
-            #     continue
-
-            # while SAMPLERATE % freq == 0:
-            #     print("Skipping {} Hz" .format(freq))
-            #     freq -= 3
-            # if freq in sorted_bl:
-            #     print("Duplicate {} Hz".format(freq))
-            #     continue
-
             sorted_bl[freq] = bl_results[i]
             for options in ALGOS_OPTIONS:
                 if options.mipmap and options.algorithm != Algorithm.NAIVE:
@@ -1598,13 +1619,25 @@ if __name__ == "__main__":
 
                 num_frames = int(DURATION_S * SAMPLERATE * options.oversampling)
                 x = np.linspace(0.0, DURATION_S*freq, num_frames, endpoint=True)
-                x = np.flip(x)
+
+                postfix = ""
+                if args.flip:
+                    x = np.flip(x)
+                    postfix = "_flipped"
+
+                if args.export_phase:
+                    filename = options.name + postfix + "_phase.wav"
+                    x_red = x % 1.0
+                    sf.write(args.export_dir / filename, x_red, samplerate=SAMPLERATE, subtype="FLOAT")
+                # x = np.flip(x)
                 # x = generate_sweep_phase(200, SAMPLERATE / 2, DURATION_S, SAMPLERATE * options.oversampling)
                 routine_args.append([options, x, cache, freq])
     
     # Run generating in parallel
+    logging.info("Computing naive and ADAA iterations using {} process".format(NUM_PROCESS))
     with Pool(NUM_PROCESS) as pool:
         results = pool.starmap(routine, routine_args)
+    logging.info("Computation ended, cleaning caches")
 
     # Delete caches to free memory
     del mipmap_caches
@@ -1612,7 +1645,6 @@ if __name__ == "__main__":
     del naive_caches
 
     if args.mode == "metrics":
-        # engine = future_engine.result()
         import matlab.engine
         engine = matlab.engine.start_matlab()
 
@@ -1620,31 +1652,18 @@ if __name__ == "__main__":
         logging.info("Computing SNRs")
         for res in results:
             num_harmonics = max(2, floor(SAMPLERATE / 2 / res[1]))
-            # print("SNR : ", res[2].shape, res[2].dtype, np.isnan(res[2]).any())
-            # if np.isnan(res[2]).any():
-            #     print("NaN found : ", res[0], res[1])
-            #     exit(1)
-
             res.append(engine.snr(res[2], SAMPLERATE, num_harmonics))
 
-        if not args.no_log:
-            logging.info("Logging SNR")
-            for (name, freq, data, snr_value) in results:
-                print("{} SNR : {}".format(name, snr_value))
     elif args.mode == "psd":
         logging.info("Plotting psd")
-
         signals = {name: signal for name, _, signal in results}
         plot_psd(signals)
+
     else:
         assert(args.mode == "sweep")
         logging.info("Plotting sweep spectrogram")
         signals = {name: signal for name, _, signal in results}
         plot_specgram(signals)
-
-
-    if args.export != "none" or args.export_audio:
-        args.export_dir.mkdir(parents=True, exist_ok=True)
 
     if args.export_audio:
         for res in results:
@@ -1681,16 +1700,10 @@ if __name__ == "__main__":
         sinad_values = [
             fast_compute_sinad(*args) for args in sinad_args
         ]
-        # with Pool(8) as pool:
-        #     sinad_values = pool.starmap(fast_compute_sinad, sinad_args)
 
         for i, (_, freq, _, _) in enumerate(results):
             sorted_sinad[freq].append(sinad_values[i])
 
-        # for [name, freq, data, snr_value] in results:
-        #     noised_fft = normalized_fft(data)
-        #     clean_fft = normalized_fft(sorted_bl[freq])
-        #     sorted_sinad[freq].append(fast_compute_sinad(noised_fft, clean_fft, freq))
 
         logging.info("Exporting SINAD to CSV")
         sinad_output = args.export_dir / (args.export_dir.name + "_sinad.csv")

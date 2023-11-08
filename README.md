@@ -1,41 +1,97 @@
-# Purpose
-This repository contains all the experiments I made based on the IEEE research paper [Antiderivative Antialiasing for Arbitrary Waveform Generation](https://ieeexplore.ieee.org/document/9854137)
+# Experimentations on ADAA for wavetable oscillators
+This repository contains all the python experiments I made based on the IEEE research paper [Antiderivative Antialiasing for Arbitrary Waveform Generation](https://ieeexplore.ieee.org/document/9854137)
 
 The paper provided an algorithm, some results and some matlab demo code which you can find [here](https://dangelo.audio/ieee-talsp-aaiir-osc.html)
 
-The code contained in here is certainly not production ready, but I made what I could to understand and try to replicate the paper code in the most comprehensible and real-time compatible way.
+This work is going to be presented at the [Audio Developer Conference 2023](https://audio.dev/conference/) alongside its C++ implementation for real-time [here](https://github.com/maxmarsc/libadawata). I'll add more graphics illustrating the results once the conference happened.
 
-TLDR; check `python/main.py::process_fwd` for a simpler python implementation.
+The code contained in here is certainly not production ready, but I made what I could to understand, replicate, and further adapt the algorithm to a real-time scenario.
 
-*Keep in mind that I'm not a DSP specialist of any kind, if you find something weird or buggy in my code don't hesitate to tell it. Also this repository is not dedicated to explain the algorithm in any case.*
+*Keep in mind that I'm not a DSP specialist, if you find something weird or buggy in my code don't hesitate to tell it. Also this repository is not dedicated to explain the algorithm in any case.*
 
+## What's included
+This repository contains 3 mains folders :
+- `matlab` : contains the Matlab code of the paper demo, slightly modified to run with Octave
+- `python` : contains the different versions of the algorithm and some tools to
+analyze the results (metrics, graphs...)
+- `python/legacy` : contains some iterations of my work when adapting the algorithm.
+It's only provided for R&D legacy and should not be considered reliable
 
-## The matlab folder
-I don't own a Matlab license, so I used Octave to run the demo code. I had to make a few modifications in the file in order for Octave to be able to parse it.
+## Python experimentations
+### Requirements
+The following tools are required :
+- `libsoxr` : for mipmapping resampling
+- `libsndfile` : for audio exporting
+- `matlab` : for SNR computation
 
-Also I fixed a few typos in the demo code.
-
-I added a `generateWavetableSaw()` method to replicate a naive saw wave from a wavetable, to process it like a real "arbitrary" wavetable.
-
-To run the demo with octave, you will need the `signal` package. Then run 
-```shell
-octave AAIIR_demo.m
+On Ubuntu you can install `libsoxr` and `libsndfile` with the following command:
+```bash
+apt-get install -y libsoxr0 libsndfile1
 ```
 
-## The python folder
-Most of my experiment were made in Python. I recoded the algorithm from matlab to python. Then I made a second version a bit simpler, focusing on making suitable for real time implementation (the base algorithm have some ever-increasing indexes which is kinda hard to support).
+To install matlab check their [website](https://www.mathworks.com/products/matlab.html)
 
-Check `python/main.py` for the details, I tried to document it so it's self-explanatory.
+After that you will need to install the python requirements :
+```bash
+pip install -r requirements.txt
+```
 
-You can find the python requirements in the `requirements.txt` file. You might also need `libsoxr`.
+### How to use
+I provide a main python script that can performs three tasks, on different version
+of both the ADAA algorithm, and its alternatives (lerp + oversampling) :
+- Metrics computation (SNR and SINAD)
+- Sweep test spectrogram plot
+- Power spectral density plot
 
-# Results
-I was able to get good results with butterworth filtering, but not with Chebyshev type-2 filtering. Whereas in the paper they claim 10th order Chebyshev had incredible results I was not able to reproduce it. *This might be because I'm missing something*
+Some values still needs to be modified manually in the `main.py` file depending on your use case:
+- `DURATION_S` : The duration of generated audio, might lead to high ram usage if too high
+- `FREQS` : A list of frequencies to generate for (only in psd/metrics modes)
+- `ALGOS_OPTIONS` :  A list of all the algorithm to test
+- `NUM_PROCESS` : The number of parallel process, maxed out to 20, mined out to you ncpus
+- `SAMPLERATE`
+
+#### Metrics
+For the metrics mode use the following options :
+```bash
+python python/main.py metrics [--export {snr,sinad,both,none}] [--export-dir EXPORT_DIR] [--export-audio] [--export-phase]
+```
+
+You'd usually want to add all the frequencies you want to test in `FREQS`.
+The script will write the metrics in CSV files.
+
+#### Sweep test
+For the metrics mode use the following options :
+```bash
+python python/main.py sweep [--export-dir EXPORT_DIR] [--export-audio] [--export-phase]
+```
+
+This will automatically generate a sweep test from 20Hz to Nyquist and plot its spectrogram.  
+This mode will not read the `FREQS` variable.  
+I suggest a duration of 5s to have a good enough resolution in the spectrogram.
+
+#### PSD
+For the psd mode use the following options :
+```bash
+python python/main.py psd [--export-dir EXPORT_DIR] [--export-audio] [--export-phase]
+```
+
+This will use a matplotlib graph to display the psd values for each test, and a final
+graph with all the waveforms on the same graphs.
+
+**This mode requires `FREQS` to contains a single value**
+
+# What's next
+As mentioned above, this is an experimentation repo, not a tool designed for
+advanced use or anything like it.
+
+I don't plan to make modifications to make it a user-friendly demo tool.
+However I'm open to suggestions in order to help further researchs such as :
+- Improvements on the argparser to allow passing frequencies and/or other parameters
+- Metrics improvements/fixes
+- Improvement/Changes in the algorithm
 
 
-For now I won't go any further because the computationnal cost would be too big for my embedded project and the results aren't good enough so far.
-
-If you wan't to discuess about it you can find me on :
+If you wan't to discuss about it you can open an issue or you can find me on :
  - [Discord](https://discordapp.com/users/Groumpf#2353)
  - [Twitter](https://twitter.com/Groumpf_)
  - [Mastodon](https://piaille.fr/@groumpf)
