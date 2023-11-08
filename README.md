@@ -3,7 +3,7 @@ This repository contains all the python experiments I made based on the IEEE res
 
 The paper provided an algorithm, some results and some matlab demo code which you can find [here](https://dangelo.audio/ieee-talsp-aaiir-osc.html)
 
-This work is going to be presented at the [Audio Developer Conference 2023](https://audio.dev/conference/) alongside its C++ implementation for real-time [here](https://github.com/maxmarsc/libadawata). I'll add more graphics illustrating the results once the conference happened.
+This work is going to be presented at the [Audio Developer Conference 2023](https://audio.dev/conference/) alongside its C++ implementation for real-time [here](https://github.com/maxmarsc/libadawata) (TBA). I'll add more graphics illustrating the results once the conference happened.
 
 The code contained in here is certainly not production ready, but I made what I could to understand, replicate, and further adapt the algorithm to a real-time scenario.
 
