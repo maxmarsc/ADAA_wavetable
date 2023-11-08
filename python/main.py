@@ -523,7 +523,7 @@ def plot_specgram(time_signals: Dict[str, np.ndarray[float]]):
     fig, axs = plt.subplots(len(time_signals))
 
     for i, (name, data) in enumerate(time_signals.items()):
-        axs[i].specgram(data, NFFT=512, noverlap=256, vmin=-60, Fs=44100)
+        axs[i].specgram(data, NFFT=512, noverlap=256, vmin=-80, Fs=44100)
         axs[i].set_title(name)
         axs[i].set_ylabel("Frequency [Hz]")
         axs[i].set_xlabel("Time [s]")
