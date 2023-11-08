@@ -10,11 +10,11 @@ The code contained in here is certainly not production ready, but I made what I 
 *Keep in mind that I'm not a DSP specialist, if you find something weird or buggy in my code don't hesitate to tell it. Also this repository is not dedicated to explain the algorithm in any case.*
 
 ## What's included
-This repository contains 3 mains folders :
+This repository contains 3 mains parts :
 - `matlab` : contains the Matlab code of the paper demo, slightly modified to run with Octave
 - `python` : contains the different versions of the algorithm and some tools to
 analyze the results (metrics, graphs...)
-- `python/legacy` : contains some iterations of my work when adapting the algorithm.
+- `python/legacy.py` : contains some iterations of my work when adapting the algorithm.
 It's only provided for R&D legacy and should not be considered reliable
 
 ## Python experimentations
