@@ -20,13 +20,13 @@ It's only provided for R&D legacy and should not be considered reliable
 ## Python experimentations
 ### Requirements
 The following tools are required :
-- `libsoxr` : for mipmapping resampling
+- `libsamplerate` : for mipmapping resampling
 - `libsndfile` : for audio exporting
 - `matlab` : for SNR computation
 
-On Ubuntu you can install `libsoxr` and `libsndfile` with the following command:
+On Ubuntu you can install `libsamplerate` and `libsndfile` with the following command:
 ```bash
-apt-get install -y libsoxr0 libsndfile1
+apt-get install -y libsamplerate0 libsndfile1
 ```
 
 To install matlab check their [website](https://www.mathworks.com/products/matlab.html)

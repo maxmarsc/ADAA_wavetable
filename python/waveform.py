@@ -1,9 +1,9 @@
 import numpy as np
 import soundfile as sf
-import soxr
 from pathlib import Path
 from enum import Enum
 from numba import njit
+import samplerate
 
 
 class Waveform:
@@ -19,21 +19,36 @@ class Waveform:
         if size == None or size == self.size:
             return self.__data[:]
         else:
-            ratio = float(size / self.size)
-            o_sr = self.__sr * ratio
+            ratio = self.size / size
             return self.__resample(ratio)
 
     def __resample(self, ratio: float) -> np.ndarray[float]:
-        repetitions = 3
-        extended = np.zeros(self.size * repetitions)
-        o_sr = self.__sr * ratio
-        o_size = int(np.floor(self.size * ratio))
-        for i in range(repetitions):
-            extended[self.size * i : self.size * (i + 1)] = self.__data
+        repetitions = 5
+        if ratio < 256:
+            extended = np.zeros(self.size * repetitions)
+            o_size = int(np.floor(self.size / ratio))
+            for i in range(repetitions):
+                extended[self.size * i : self.size * (i + 1)] = self.__data
 
-        resampled = soxr.resample(extended, self.size, o_size, quality="VHQ")
+            resampled = samplerate.resample(extended, 1.0 / ratio)
+            return resampled[
+                o_size * (repetitions // 2) : o_size * (repetitions // 2 + 1)
+            ]
+        else:
+            intermediate_ratio = ratio / 256
+            intermediate_waveform = self.__resample(intermediate_ratio)
+            intermediate_size = intermediate_waveform.shape[0]
+            extended = np.zeros(intermediate_size * repetitions)
+            o_size = int(np.floor(self.size / ratio))
+            for i in range(repetitions):
+                extended[
+                    intermediate_size * i : intermediate_size * (i + 1)
+                ] = intermediate_waveform
 
-        return resampled[o_size * (repetitions // 2) : o_size * (repetitions // 2 + 1)]
+            resampled = samplerate.resample(extended, 1.0 / 256)
+            return resampled[
+                o_size * (repetitions // 2) : o_size * (repetitions // 2 + 1)
+            ]
 
 
 class FileWaveform(Waveform):

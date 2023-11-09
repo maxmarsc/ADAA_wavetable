@@ -1119,8 +1119,13 @@ if __name__ == "__main__":
         plot_specgram(signals)
 
     if args.export_audio:
+        if args.flip:
+            postfix = "_flipped"
+        else:
+            postfix = ""
+
         for res in results:
-            filename = res[0] + ".wav"
+            filename = res[0] + postfix + ".wav"
             sf.write(
                 args.export_dir / filename, res[2] * 0.50, SAMPLERATE, subtype="FLOAT"
             )
