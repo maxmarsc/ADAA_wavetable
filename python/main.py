@@ -26,6 +26,8 @@ from bl_waveform import bl_sawtooth
 from decimator import Decimator17, Decimator9
 from waveform import FileWaveform, NaiveWaveform
 from mipmap import *
+from metrics import snr as custom_snr
+from metrics import sinad as custom_sinad
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
@@ -33,7 +35,7 @@ SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
 # Watch out for ram usage
-DURATION_S = 5.0
+DURATION_S = 1.0
 # Watch out for ram usage
 NUM_PROCESS = min(os.cpu_count(), 20)
 
@@ -206,7 +208,8 @@ def normalized_fft(time_signal, padding: int = 0) -> np.ndarray:
         padded_signal[padding:-padding] = time_signal
         time_signal = padded_signal
 
-    window = np.blackman(padding_len)
+    # window = np.blackman(padding_len)
+    window = np.kaiser(padding_len, 38)
     fft = np.fft.rfft(time_signal * window)
     return fft / np.max(np.abs(fft))
 
@@ -250,53 +253,6 @@ def mipmap_mq_from_waveform(
         q_diff_list.append(q_diff)
 
     return (m_list, q_list, m_diff_list, q_diff_list)
-
-
-@njit
-def fast_compute_sinad(
-    noised_fft: np.ndarray, clean_fft: np.ndarray, fundamental: float
-) -> float:
-    assert noised_fft.shape == clean_fft.shape
-    assert noised_fft.shape[0] > 0
-
-    fft_size = noised_fft.shape[0]
-    bin_size = SAMPLERATE / 2 / (fft_size - 1)
-
-    # find fundamental frequency
-    fundamental_bin = np.argmax(np.abs(clean_fft))
-
-    # normalize so the two signals have the same fundamental power
-    norm_ratio = np.abs(clean_fft[fundamental_bin]) / np.abs(
-        noised_fft[fundamental_bin]
-    )
-    clean_fft /= norm_ratio
-
-    # Compute Harmonic Distortion
-    harmonics = [i * fundamental_bin for i in range(2, fft_size // fundamental_bin)]
-    hd_power = np.sum(
-        np.array(
-            [(np.abs(noised_fft[h]) - np.abs(clean_fft[h])) ** 2 for h in harmonics]
-        )
-    )
-
-    # Compute Noise
-    noise_bins = [
-        i
-        for i in range(1, len(noised_fft) // 2)
-        if i not in harmonics and i != fundamental_bin
-    ]
-    noise_power = np.sum(
-        np.array(
-            [(np.abs(noised_fft[n]) - np.abs(clean_fft[n])) ** 2 for n in noise_bins]
-        )
-    )
-
-    # Compute SINAD
-    signal_power = np.abs(clean_fft[fundamental_bin])
-    sinad_value = (signal_power + hd_power + noise_power) / (hd_power + noise_power)
-    sinad_db = 10 * np.log10(sinad_value)
-
-    return sinad_db
 
 
 from enum import Enum
@@ -477,13 +433,17 @@ class AlgorithmDetails:
         name += "_w{}".format(self.waveform_len)
         return name
 
+    @property
+    def num_harmonics(self) -> int:
+        return self.waveform_len // 2 - 1
+
     def name_with_freq(self, freq: int) -> str:
         return self.name + "_{}Hz".format(freq)
 
 
 def routine(
     details: AlgorithmDetails, x, cache, freq: int = None
-) -> Tuple[str, int, np.ndarray[float]]:
+) -> Tuple[str, int, np.ndarray[float], AlgorithmDetails]:
     if freq is None:
         name = details.name
     else:
@@ -501,7 +461,7 @@ def routine(
         )[0]
 
     logging.info("{} : end".format(name))
-    return [name, freq, generated]
+    return [name, freq, generated, details]
 
 
 def plot_psd(time_signals: Dict[str, np.ndarray[float]]):
@@ -915,7 +875,7 @@ if __name__ == "__main__":
     # Define the export argument as a choice between "snr", "sinad", and "both"
     parser.add_argument(
         "--export",
-        choices=["snr", "sinad", "both", "none"],
+        choices=["snr", "sinad", "both"],
         default="both",
         help="Choose what to export: snr, sinad, or both (default)",
     )
@@ -1096,28 +1056,6 @@ if __name__ == "__main__":
     del adaa_caches
     del naive_caches
 
-    if args.mode == "metrics":
-        import matlab.engine
-
-        engine = matlab.engine.start_matlab()
-
-        # Compute SNRs
-        logging.info("Computing SNRs")
-        for res in results:
-            num_harmonics = max(2, floor(SAMPLERATE / 2 / res[1]))
-            res.append(engine.snr(res[2], SAMPLERATE, num_harmonics))
-
-    elif args.mode == "psd":
-        logging.info("Plotting psd")
-        signals = {name: signal for name, _, signal in results}
-        plot_psd(signals)
-
-    else:
-        assert args.mode == "sweep"
-        logging.info("Plotting sweep spectrogram")
-        signals = {name: signal for name, _, signal in results}
-        plot_specgram(signals)
-
     if args.export_audio:
         if args.flip:
             postfix = "_flipped"
@@ -1130,45 +1068,70 @@ if __name__ == "__main__":
                 args.export_dir / filename, res[2] * 0.50, SAMPLERATE, subtype="FLOAT"
             )
 
-    # Write to CSV
-    if args.export in ("snr", "both"):
-        assert args.export_dir is not None
+    if args.mode == "psd":
+        logging.info("Plotting psd")
+        signals = {name: signal for name, _, signal, _ in results}
+        plot_psd(signals)
 
-        logging.info("Exporting SNR to CSV")
-        # Sort data for csv
-        sorted_results = defaultdict(list)
-        for [name, freq, data, snr_value] in results:
-            sorted_results[freq].append(snr_value)
+    elif args.mode == "sweep":
+        logging.info("Plotting sweep spectrogram")
+        signals = {name: signal for name, _, signal, _ in results}
+        plot_specgram(signals)
 
-        csv_output = args.export_dir / (args.export_dir.name + "_snr.csv")
-        with open(csv_output, "w") as csv_file:
-            csvwriter = csv.writer(csv_file)
-            names = [opt.name for opt in ALGOS_OPTIONS]
-            csvwriter.writerow(["frequency", *names])
+    else:
+        # SNR export
+        if args.export in ("snr", "both"):
+            assert args.export_dir is not None
 
-            for freq, snr_values in sorted_results.items():
-                csvwriter.writerow([freq, *snr_values])
+            logging.info("Computing SNRs")
+            sorted_snr = defaultdict(list)
+            snr_args = [
+                [freq, np.square(np.abs(normalized_fft(data))), SAMPLERATE]
+                for (_, freq, data, _) in results
+            ]
+            snr_values = [custom_snr(*args) for args in snr_args]
+            for i, (_, freq, _, _) in enumerate(results):
+                sorted_snr[freq].append(snr_values[i])
 
-        del sorted_results
+            logging.info("Exporting SNR to CSV")
+            csv_output = args.export_dir / (args.export_dir.name + "_snr.csv")
+            with open(csv_output, "w") as csv_file:
+                csvwriter = csv.writer(csv_file)
+                names = [opt.name for opt in ALGOS_OPTIONS]
+                csvwriter.writerow(["frequency", *names])
 
-    if args.export in ("sinad", "both"):
-        sorted_sinad = defaultdict(list)
-        sinad_args = [
-            [normalized_fft(data), normalized_fft(sorted_bl[freq]), freq]
-            for (_, freq, data, _) in results
-        ]
-        logging.info("Computing SINADs")
-        sinad_values = [fast_compute_sinad(*args) for args in sinad_args]
+                for freq, snr_values in sorted_snr.items():
+                    csvwriter.writerow([freq, *snr_values])
 
-        for i, (_, freq, _, _) in enumerate(results):
-            sorted_sinad[freq].append(sinad_values[i])
+            del sorted_snr
 
-        logging.info("Exporting SINAD to CSV")
-        sinad_output = args.export_dir / (args.export_dir.name + "_sinad.csv")
-        with open(sinad_output, "w") as csv_file:
-            csvwriter = csv.writer(csv_file)
-            names = [opt.name for opt in ALGOS_OPTIONS]
-            csvwriter.writerow(["frequency", *names])
+        # SINAD
+        if args.export in ("sinad", "both"):
+            assert args.export_dir is not None
 
-            for freq, sinad_values in sorted_sinad.items():
-                csvwriter.writerow([freq, *sinad_values])
+            logging.info("Computing SINADs")
+            sorted_sinad = defaultdict(list)
+            sinad_args = [
+                [
+                    freq,
+                    np.abs(normalized_fft(sorted_bl[freq])),
+                    np.abs(normalized_fft(data)),
+                    SAMPLERATE,
+                    details.num_harmonics,
+                ]
+                for (_, freq, data, details) in results
+            ]
+            sinad_values = [custom_sinad(*args) for args in sinad_args]
+
+            for i, (_, freq, _, _) in enumerate(results):
+                sorted_sinad[freq].append(sinad_values[i])
+
+            logging.info("Exporting SINAD to CSV")
+            sinad_output = args.export_dir / (args.export_dir.name + "_sinad.csv")
+            with open(sinad_output, "w") as csv_file:
+                csvwriter = csv.writer(csv_file)
+                names = [opt.name for opt in ALGOS_OPTIONS]
+                csvwriter.writerow(["frequency", *names])
+
+                for freq, sinad_values in sorted_sinad.items():
+                    csvwriter.writerow([freq, *sinad_values])

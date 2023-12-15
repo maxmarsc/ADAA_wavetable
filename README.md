@@ -22,7 +22,6 @@ It's only provided for R&D legacy and should not be considered reliable
 The following tools are required :
 - `libsamplerate` : for mipmapping resampling
 - `libsndfile` : for audio exporting
-- `matlab` : for SNR computation
 
 On Ubuntu you can install `libsamplerate` and `libsndfile` with the following command:
 ```bash
@@ -87,7 +86,7 @@ advanced use or anything like it.
 I don't plan to make modifications to make it a user-friendly demo tool.
 However I'm open to suggestions in order to help further researchs such as :
 - Improvements on the argparser to allow passing frequencies and/or other parameters
-- Metrics improvements/fixes
+- ~~Metrics improvements/fixes~~ DONE
 - Improvement/Changes in the algorithm
 
 

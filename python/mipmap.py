@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from numba import njit
 import numpy as np
-import soxr
+# import soxr
 import logging
 
 from typing import List, Tuple
@@ -25,7 +25,7 @@ def mipmap_size(min_pow: int, max_pow: int):
 
 
 def mipmap_scale(max_size: int, samplerate: float, num: int) -> np.ndarray[float]:
-    start = samplerate / max_size * 2  # Empiric
+    start = samplerate / max_size * 3  # Empiric
     freqs = np.array([start * 2**i for i in range(num)])
     logging.info("Frequency mipmap scale : {}".format(freqs))
     logging.info("Phase mipmap scale : {}".format(freqs / samplerate))
@@ -62,10 +62,10 @@ def find_mipmap_xfading_indexes(
         return (mipmap_idx, factor_crt, mipmap_idx + 1, factor_next)
 
 
-def compute_mipmap_waveform(
-    waveform: np.ndarray[float], count: int
-) -> List[np.ndarray[float]]:
-    return [soxr.resample(waveform, 2**i, 1, quality="VHQ") for i in range(count)]
+# def compute_mipmap_waveform(
+#     waveform: np.ndarray[float], count: int
+# ) -> List[np.ndarray[float]]:
+#     return [soxr.resample(waveform, 2**i, 1, quality="VHQ") for i in range(count)]
 
 
 if __name__ == "__main__":
