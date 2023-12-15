@@ -904,17 +904,17 @@ if __name__ == "__main__":
 
     import matlab.engine
 
-    FREQS = np.logspace(start=5, stop=14.4, num=200, base=2)
-    # FREQS = [2007]
+    FREQS = np.logspace(start=5, stop=14.4, num=100, base=2)
+    # FREQS = [416]
     # FREQS = [noteToFreq(i) for i in range(128)]
 
     ALGOS_OPTIONS = [
         AlgorithmDetails(Algorithm.NAIVE, 1, 0),
-        # AlgorithmDetails(Algorithm.NAIVE, 2, 0),
-        # AlgorithmDetails(Algorithm.NAIVE, 4, 0),
+        AlgorithmDetails(Algorithm.NAIVE, 2, 0),
+        AlgorithmDetails(Algorithm.NAIVE, 4, 0),
         AlgorithmDetails(Algorithm.NAIVE, 8, 0),
-        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2),
         AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=True),
+        # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=1024),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=512),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=256),
@@ -922,6 +922,7 @@ if __name__ == "__main__":
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=64),
         # AlgorithmDetails(Algorithm.ADAA_BUTTERWORTH, 1, 2, mipmap=False, waveform_len=32),
         AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=True),
+        # AlgorithmDetails(Algorithm.ADAA_CHEBYSHEV_TYPE2, 1, 8, mipmap=True),
     ]
     sorted_bl = dict()
 

@@ -3,7 +3,7 @@ This repository contains all the python experiments I made based on the IEEE res
 
 The paper provided an algorithm, some results and some matlab demo code which you can find [here](https://dangelo.audio/ieee-talsp-aaiir-osc.html)
 
-This work is going to be presented at the [Audio Developer Conference 2023](https://audio.dev/conference/) alongside its C++ implementation for real-time [here](https://github.com/maxmarsc/libadawata) (TBA). I'll add more graphics illustrating the results once the conference happened.
+This work was presented at the [Audio Developer Conference 2023](https://audio.dev/conference/) alongside its C++ implementation for real-time [here](https://github.com/maxmarsc/libadawata). 
 
 The code contained in here is certainly not production ready, but I made what I could to understand, replicate, and further adapt the algorithm to a real-time scenario.
 
@@ -27,8 +27,6 @@ On Ubuntu you can install `libsamplerate` and `libsndfile` with the following co
 ```bash
 apt-get install -y libsamplerate0 libsndfile1
 ```
-
-To install matlab check their [website](https://www.mathworks.com/products/matlab.html)
 
 After that you will need to install the python requirements :
 ```bash
