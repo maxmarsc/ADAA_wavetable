@@ -522,12 +522,12 @@ def process_bi_mipmap_xfading(
     prev_cpx_y: complex = 0
     prev_x_diff = 0
 
-    # Setting j indexs and some reduced values
+    # Setting j indices and some reduced values
     x_red = prev_x % 1.0
     x_diff = x[1] - x[0]
-    mipmap_xfade_idxs = find_mipmap_xfading_indexes(abs(x_diff), mipmap_scale)
-    prev_mipmap_idx = mipmap_xfade_idxs[0]
-    waveform_frames = m_mipmap[prev_mipmap_idx].shape[0]
+    crossfader = CrossFader(ceil(CROSSFADE_S * SAMPLERATE), mipmap_scale, abs(x_diff))
+    prev_mipmap_idx = crossfader.prev_idx
+    waveform_frames = m_mipmap[crossfader.prev_idx].shape[0]
     if x_diff > 0:
         j_red = floor(x_red * waveform_frames)
     else:
@@ -541,8 +541,8 @@ def process_bi_mipmap_xfading(
         elif x_diff > 0.5:
             x_diff -= 1.0
 
-        mipmap_idx, weight, mipmap_idx_up, weight_up = find_mipmap_xfading_indexes(
-            abs(x_diff), mipmap_scale
+        mipmap_idx, weight, mipmap_idx_up, weight_up = crossfader.new_xfading_indices(
+            abs(x_diff)
         )
         waveform_frames = m_mipmap[mipmap_idx].shape[0]  # aka k
 

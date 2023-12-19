@@ -17,6 +17,15 @@ analyze the results (metrics, graphs...)
 - `python/legacy.py` : contains some iterations of my work when adapting the algorithm.
 It's only provided for R&D legacy and should not be considered reliable
 
+## What changed since ADC23
+- Matlab is no longer required to compute SNR. Both SNR and SINAD computations
+are working as expected and in full python code
+- Following SINAD fixes, I changed the mipmap transition thresholds, algorithm
+should be a little slower
+- The cross-fading is no longer using this weird frequency-based strategy I presented
+at ADC23, now using a more classic time-based strategy
+
+
 ## Python experimentations
 ### Requirements
 The following tools are required :
