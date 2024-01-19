@@ -26,14 +26,16 @@ from bl_waveform import bl_sawtooth
 from decimator import Decimator17, Decimator9
 from waveform import FileWaveform, NaiveWaveform
 from mipmap import *
-from metrics import snr as custom_snr
-from metrics import sinad as custom_sinad
+
+from metrics import compute_harmonic_factors
+import audioaliasingmetrics as aam
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 SAMPLERATE = 44100
 BUTTERWORTH_CTF = 0.45 * SAMPLERATE
 CHEBY_CTF = 0.61 * SAMPLERATE
+CROSSFADE_S = 0.005
 # Watch out for ram usage
 DURATION_S = 1.0
 # Watch out for ram usage
@@ -1087,10 +1089,15 @@ if __name__ == "__main__":
             logging.info("Computing SNRs")
             sorted_snr = defaultdict(list)
             snr_args = [
-                [freq, np.square(np.abs(normalized_fft(data))), SAMPLERATE]
+                [
+                    np.abs(normalized_fft(data)),
+                    SAMPLERATE,
+                    freq,
+                    aam.Harmonics.ALL,
+                ]
                 for (_, freq, data, _) in results
             ]
-            snr_values = [custom_snr(*args) for args in snr_args]
+            snr_values = [aam.snr(*args) for args in snr_args]
             for i, (_, freq, _, _) in enumerate(results):
                 sorted_snr[freq].append(snr_values[i])
 
@@ -1114,15 +1121,15 @@ if __name__ == "__main__":
             sorted_sinad = defaultdict(list)
             sinad_args = [
                 [
-                    freq,
-                    np.abs(normalized_fft(sorted_bl[freq])),
                     np.abs(normalized_fft(data)),
+                    np.abs(normalized_fft(sorted_bl[freq])),
                     SAMPLERATE,
-                    details.num_harmonics,
+                    freq,
+                    compute_harmonic_factors(freq, SAMPLERATE, details.num_harmonics),
                 ]
                 for (_, freq, data, details) in results
             ]
-            sinad_values = [custom_sinad(*args) for args in sinad_args]
+            sinad_values = [aam.sinad(*args) for args in sinad_args]
 
             for i, (_, freq, _, _) in enumerate(results):
                 sorted_sinad[freq].append(sinad_values[i])

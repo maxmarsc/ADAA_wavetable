@@ -4,3 +4,4 @@ numpy==1.24.1
 scipy==1.10.0
 soundfile==0.11.0
 samplerate==0.1.0
+pyaudioaliasingmetrics==0.1.0
